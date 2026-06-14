@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Plus, TrendingUp, ArrowRightLeft, UserMinus, Check, Briefcase, Download, ChevronDown, ChevronRight } from 'lucide-react';
 import { useApp } from '../contexts/AppContext';
 import { useCompanies, useOrgUnits, useEmployees } from '../hooks/useData';
@@ -361,33 +361,108 @@ function HistoryModal({ L, lang, theme, emp, companies, orgUnits, showSalaries, 
 
 // ── Digər Modallar ───────────────────────────────────────────────────────────
 function AddEmployeeModal({ L, theme, lang, companies, orgUnits, onSave, onClose }) {
-  const [d, setD] = useState({ full_name:'', position:'', company_id: companies[0]?.id||'', org_unit_id:'', salary:'', start_date: toISO(new Date()) });
+  const [d, setD] = useState({
+    full_name: '', position_type_id: '', company_id: companies[0]?.id || '',
+    org_unit_id: '', salary: '', start_date: toISO(new Date()),
+  });
+  const [positionTypes, setPositionTypes] = useState([]);
+  const [loadingPt, setLoadingPt] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from('position_types').select('*').order('name_az');
+      setPositionTypes(data || []);
+      setLoadingPt(false);
+    })();
+  }, []);
+
+  // Seçilmiş org unit-ə bağlı vəzifə planları — yalnız həmin unitdəki vəzifələri göstər
+  const [unitPositionTypes, setUnitPositionTypes] = useState([]);
+  useEffect(() => {
+    if (!d.org_unit_id) { setUnitPositionTypes(positionTypes); return; }
+    (async () => {
+      const { data } = await supabase
+        .from('position_headcounts')
+        .select('position_type_id')
+        .eq('org_unit_id', d.org_unit_id);
+      if (data?.length) {
+        const ids = new Set(data.map(x => x.position_type_id));
+        setUnitPositionTypes(positionTypes.filter(p => ids.has(p.id)));
+      } else {
+        // Həmin unit üçün plan yoxdursa bütün tipləri göstər
+        setUnitPositionTypes(positionTypes);
+      }
+    })();
+  }, [d.org_unit_id, positionTypes]);
+
   const filteredOus = orgUnits.filter(u => u.company_id === d.company_id);
-  const valid = d.full_name && d.position && d.salary && d.start_date && d.org_unit_id;
+  const selectedPt  = positionTypes.find(p => p.id === d.position_type_id);
+  const valid = d.full_name && d.position_type_id && d.salary && d.start_date && d.org_unit_id;
+
   return (
     <Modal onClose={onClose} theme={theme} title={L.emp.add}>
       <div className="space-y-3">
-        <Field label={L.emp.name} theme={theme}><input value={d.full_name} onChange={e=>setD({...d,full_name:e.target.value})} className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`} autoFocus/></Field>
-        <Field label={L.emp.position} theme={theme}><input value={d.position} onChange={e=>setD({...d,position:e.target.value})} className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`}/></Field>
+        <Field label={L.emp.name} theme={theme}>
+          <input value={d.full_name} onChange={e => setD({ ...d, full_name: e.target.value })}
+            className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`} autoFocus />
+        </Field>
+
         <div className="grid grid-cols-2 gap-3">
           <Field label={L.emp.company} theme={theme}>
-            <select value={d.company_id} onChange={e=>setD({...d,company_id:e.target.value,org_unit_id:''})} className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`}>
-              {companies.map(c=><option key={c.id} value={c.id}>{c.name_az}</option>)}
+            <select value={d.company_id}
+              onChange={e => setD({ ...d, company_id: e.target.value, org_unit_id: '', position_type_id: '' })}
+              className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`}>
+              {companies.map(c => <option key={c.id} value={c.id}>{c.name_az}</option>)}
             </select>
           </Field>
           <Field label={L.emp.orgUnit} theme={theme}>
-            <select value={d.org_unit_id} onChange={e=>setD({...d,org_unit_id:e.target.value})} className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`}>
-              <option value="">—</option>
-              {filteredOus.map(u=><option key={u.id} value={u.id}>{L.levels[u.level]} · {u.name_az}</option>)}
+            <select value={d.org_unit_id}
+              onChange={e => setD({ ...d, org_unit_id: e.target.value, position_type_id: '' })}
+              className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`}>
+              <option value="">— seçin —</option>
+              {filteredOus.map(u => <option key={u.id} value={u.id}>{L.levels[u.level]} · {u.name_az}</option>)}
             </select>
           </Field>
         </div>
+
+        <Field label={L.emp.position} theme={theme}>
+          {loadingPt ? (
+            <div className={`px-3 py-2 text-sm ${theme.textDim}`}>Yüklənir...</div>
+          ) : unitPositionTypes.length === 0 ? (
+            <div className={`px-3 py-2 text-sm text-amber-500 border ${theme.border} rounded-lg`}>
+              ⚠️ Əvvəlcə "Vəzifələr" bölməsindən bu org unit üçün vəzifə planı yaradın
+            </div>
+          ) : (
+            <select value={d.position_type_id}
+              onChange={e => setD({ ...d, position_type_id: e.target.value })}
+              className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`}>
+              <option value="">— vəzifə seçin —</option>
+              {unitPositionTypes.map(p => <option key={p.id} value={p.id}>{p.name_az}</option>)}
+            </select>
+          )}
+          {selectedPt?.manager_position_type_id && (() => {
+            const mgr = positionTypes.find(p => p.id === selectedPt.manager_position_type_id);
+            return mgr ? (
+              <div className={`text-[11px] mt-1 ${theme.textFaint}`}>
+                Rəhbər vəzifəsi: <span className="text-blue-500 font-medium">{mgr.name_az}</span>
+              </div>
+            ) : null;
+          })()}
+        </Field>
+
         <div className="grid grid-cols-2 gap-3">
-          <Field label={`${L.emp.salary} (AZN)`} theme={theme}><input type="number" value={d.salary} onChange={e=>setD({...d,salary:e.target.value})} className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm tabular-nums`}/></Field>
-          <Field label={L.emp.hireDate} theme={theme}><input type="date" value={d.start_date} onChange={e=>setD({...d,start_date:e.target.value})} className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`}/></Field>
+          <Field label={`${L.emp.salary} (AZN)`} theme={theme}>
+            <input type="number" value={d.salary} onChange={e => setD({ ...d, salary: e.target.value })}
+              className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm tabular-nums`} />
+          </Field>
+          <Field label={L.emp.hireDate} theme={theme}>
+            <input type="date" value={d.start_date} onChange={e => setD({ ...d, start_date: e.target.value })}
+              className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`} />
+          </Field>
         </div>
       </div>
-      <Buttons onSave={()=>onSave(d)} onCancel={onClose} disabled={!valid} L={L} theme={theme}/>
+      <Buttons onSave={() => onSave({ ...d, position: selectedPt?.name_az || '' })}
+        onCancel={onClose} disabled={!valid} L={L} theme={theme} />
     </Modal>
   );
 }
