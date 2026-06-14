@@ -368,20 +368,18 @@ function AddEmployeeModal({ L, theme, lang, companies, orgUnits, onSave, onClose
   const [unitPositions, setUnitPositions] = useState([]);
   const [loadingPos, setLoadingPos] = useState(false);
 
-  // Org unit seçiləndə həmin unit üçün vəzifə adlarını yüklə
   useEffect(() => {
-    if (!d.org_unit_id) { setUnitPositions([]); return; }
+    if (!d.org_unit_id && !d.company_id) { setUnitPositions([]); return; }
     (async () => {
       setLoadingPos(true);
-      const { data } = await supabase
-        .from('position_headcounts')
-        .select('position_name, manager_name, planned_count')
-        .eq('org_unit_id', d.org_unit_id)
-        .not('position_name', 'is', null);
+      // Həmin şirkətə aid vəzifələri yüklə (org unit seçilmişsə onunla da filtrə)
+      let q = supabase.from('positions').select('id, name, parent_id').eq('company_id', d.company_id);
+      if (d.org_unit_id) q = q.or(`org_unit_id.eq.${d.org_unit_id},org_unit_id.is.null`);
+      const { data } = await q.order('name');
       setUnitPositions(data || []);
       setLoadingPos(false);
     })();
-  }, [d.org_unit_id]);
+  }, [d.org_unit_id, d.company_id]);
 
   const filteredOus = orgUnits.filter(u => u.company_id === d.company_id);
   const valid = d.full_name && d.position && d.salary && d.start_date && d.org_unit_id;
@@ -414,30 +412,25 @@ function AddEmployeeModal({ L, theme, lang, companies, orgUnits, onSave, onClose
         </div>
 
         <Field label={L.emp.position} theme={theme}>
-          {!d.org_unit_id ? (
+          {!d.company_id ? (
             <div className={`px-3 py-2.5 rounded-lg border ${theme.border} text-sm ${theme.textFaint}`}>
-              Əvvəlcə bölmə seçin
+              Əvvəlcə şirkət seçin
             </div>
           ) : loadingPos ? (
             <div className={`px-3 py-2.5 text-sm ${theme.textDim}`}>Yüklənir...</div>
           ) : unitPositions.length === 0 ? (
             <div className={`px-3 py-2.5 text-sm text-amber-500 border border-amber-500/30 rounded-lg bg-amber-500/5`}>
-              ⚠ Bu bölmə üçün vəzifə planı yoxdur. Əvvəlcə "Vəzifələr" bölməsindən yaradın.
+              ⚠ Bu şirkət üçün vəzifə yoxdur. Əvvəlcə "Vəzifələr" bölməsindən yaradın.
             </div>
           ) : (
             <select value={d.position}
               onChange={e => setD({ ...d, position: e.target.value })}
               className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`}>
               <option value="">— vəzifə seçin —</option>
-              {unitPositions.map((p, i) => (
-                <option key={i} value={p.position_name}>{p.position_name}</option>
+              {unitPositions.map(p => (
+                <option key={p.id} value={p.name}>{p.name}</option>
               ))}
             </select>
-          )}
-          {selectedPos?.manager_name && (
-            <div className={`text-[11px] mt-1 ${theme.textFaint}`}>
-              Rəhbər: <span className="text-blue-500 font-medium">{selectedPos.manager_name}</span>
-            </div>
           )}
         </Field>
 
