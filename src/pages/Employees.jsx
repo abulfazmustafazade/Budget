@@ -360,7 +360,68 @@ function HistoryModal({ L, lang, theme, emp, companies, orgUnits, showSalaries, 
 }
 
 // ── Digər Modallar ───────────────────────────────────────────────────────────
+function OrgTreePicker({ orgUnits, companyId, selected, onSelect, theme }) {
+  const [open, setOpen] = React.useState(new Set());
+  const L_COLORS = {
+    division:'bg-blue-500/10 text-blue-600 dark:text-blue-400',
+    department:'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+    sub_department:'bg-purple-500/10 text-purple-500',
+    unit:'bg-amber-500/10 text-amber-600',
+    sub_unit:'bg-slate-500/10 text-slate-500',
+  };
+  const L_NAMES = {division:'Bölmə',department:'Departament',sub_department:'Alt-dept',unit:'Şöbə',sub_unit:'Alt-şöbə'};
+  const units = orgUnits.filter(u => u.company_id === companyId);
+  const toggle = id => { const s = new Set(open); s.has(id)?s.delete(id):s.add(id); setOpen(s); };
+  const Row = ({ u, depth }) => {
+    const children = units.filter(x => x.parent_id === u.id);
+    const isOpen = open.has(u.id) || depth < 1;
+    return (
+      <>
+        <button onClick={() => onSelect(u.id)}
+          className={`w-full text-left flex items-center gap-2 py-2.5 border-b ${theme.border} last:border-0 transition-colors ${selected === u.id ? 'bg-blue-500/10' : 'hover:bg-blue-500/5'}`}
+          style={{ paddingLeft: `${12 + depth * 20}px`, paddingRight: '12px' }}>
+          {children.length > 0
+            ? <span onClick={e => { e.stopPropagation(); toggle(u.id); }} className={`w-4 text-center text-xs ${theme.textFaint}`}>{isOpen ? '▾' : '▸'}</span>
+            : <span className="w-4" />}
+          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${L_COLORS[u.level]}`}>{L_NAMES[u.level]}</span>
+          <span className={`text-sm flex-1 ${selected === u.id ? 'font-bold' : ''}`}>{u.name_az}</span>
+          {selected === u.id && <span className="text-blue-500 text-xs font-bold">✓</span>}
+        </button>
+        {isOpen && children.map(c => <Row key={c.id} u={c} depth={depth + 1} />)}
+      </>
+    );
+  };
+  const roots = units.filter(u => !u.parent_id);
+  return (
+    <div className={`rounded-xl border ${theme.border} overflow-hidden max-h-72 overflow-y-auto`}>
+      {roots.length === 0
+        ? <div className={`p-6 text-center text-sm ${theme.textDim}`}>Struktur yoxdur.</div>
+        : roots.map(u => <Row key={u.id} u={u} depth={0} />)}
+    </div>
+  );
+}
+
+function WizardStepsEmp({ steps, current, theme }) {
+  return (
+    <div className="flex items-center gap-2 mb-6">
+      {steps.map((s, i) => {
+        const n = i + 1, done = current > n, active = current === n;
+        return (
+          <React.Fragment key={n}>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${done ? 'bg-emerald-500 text-white' : active ? 'bg-blue-600 text-white' : `${theme.surface2} border ${theme.border} ${theme.textFaint}`}`}>{done ? '✓' : n}</div>
+              <span className={`text-xs font-semibold ${active ? theme.text : theme.textFaint}`}>{s}</span>
+            </div>
+            {i < steps.length - 1 && <div className="flex-1" style={{height:'1px', background: done ? '#10b981' : '#e2e8f0'}} />}
+          </React.Fragment>
+        );
+      })}
+    </div>
+  );
+}
+
 function AddEmployeeModal({ L, theme, lang, companies, orgUnits, onSave, onClose }) {
+  const [step, setStep] = useState(1);
   const [d, setD] = useState({
     full_name: '', position: '', company_id: companies[0]?.id || '',
     org_unit_id: '', salary: '', start_date: toISO(new Date()),
@@ -369,83 +430,119 @@ function AddEmployeeModal({ L, theme, lang, companies, orgUnits, onSave, onClose
   const [loadingPos, setLoadingPos] = useState(false);
 
   useEffect(() => {
-    if (!d.org_unit_id && !d.company_id) { setUnitPositions([]); return; }
+    if (!d.company_id) { setUnitPositions([]); return; }
     (async () => {
       setLoadingPos(true);
-      // Həmin şirkətə aid vəzifələri yüklə (org unit seçilmişsə onunla da filtrə)
-      let q = supabase.from('positions').select('id, name, parent_id').eq('company_id', d.company_id);
+      let q = supabase.from('positions').select('id, name').eq('company_id', d.company_id);
       if (d.org_unit_id) q = q.or(`org_unit_id.eq.${d.org_unit_id},org_unit_id.is.null`);
       const { data } = await q.order('name');
       setUnitPositions(data || []);
       setLoadingPos(false);
     })();
-  }, [d.org_unit_id, d.company_id]);
+  }, [d.company_id, d.org_unit_id]);
 
-  const filteredOus = orgUnits.filter(u => u.company_id === d.company_id);
+  const selectedCompany = companies.find(c => c.id === d.company_id);
+  const getOuPath = id => {
+    const path = []; let cur = orgUnits.find(u => u.id === id);
+    while (cur) { path.unshift(cur.name_az); cur = orgUnits.find(u => u.id === cur.parent_id); }
+    return path.join(' › ');
+  };
   const valid = d.full_name && d.position && d.salary && d.start_date && d.org_unit_id;
-  const selectedPos = unitPositions.find(p => p.position_name === d.position);
 
   return (
-    <Modal onClose={onClose} theme={theme} title={L.emp.add}>
-      <div className="space-y-3">
-        <Field label={L.emp.name} theme={theme}>
-          <input value={d.full_name} onChange={e => setD({ ...d, full_name: e.target.value })}
-            className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`} autoFocus />
-        </Field>
+    <Modal onClose={onClose} theme={theme} title={L.emp.add} wide>
+      <WizardStepsEmp steps={['Şirkət', 'Bölmə', 'İşçi məlumatı']} current={step} theme={theme} />
 
-        <div className="grid grid-cols-2 gap-3">
-          <Field label={L.emp.company} theme={theme}>
-            <select value={d.company_id}
-              onChange={e => setD({ ...d, company_id: e.target.value, org_unit_id: '', position: '' })}
-              className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`}>
-              {companies.map(c => <option key={c.id} value={c.id}>{c.name_az}</option>)}
-            </select>
-          </Field>
-          <Field label={L.emp.orgUnit} theme={theme}>
-            <select value={d.org_unit_id}
-              onChange={e => setD({ ...d, org_unit_id: e.target.value, position: '' })}
-              className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`}>
-              <option value="">— seçin —</option>
-              {filteredOus.map(u => <option key={u.id} value={u.id}>{L.levels[u.level]} · {u.name_az}</option>)}
-            </select>
-          </Field>
+      {step === 1 && (
+        <div className="space-y-2">
+          <div className={`text-sm font-semibold mb-3 ${theme.textDim}`}>Hansı şirkətdə işə götürürsünüz?</div>
+          {companies.map(c => (
+            <button key={c.id} onClick={() => { setD({ ...d, company_id: c.id, org_unit_id: '', position: '' }); setStep(2); }}
+              className={`w-full text-left px-4 py-3 rounded-xl border-2 flex items-center justify-between transition-all ${d.company_id === c.id ? 'border-blue-500 bg-blue-500/5' : `${theme.border} hover:border-blue-300`}`}>
+              <div>
+                <div className="font-bold">{c.name_az}</div>
+                <div className={`text-xs ${theme.textDim}`}>{c.name_en}</div>
+              </div>
+              {d.company_id === c.id && <div className="w-5 h-5 rounded-full bg-blue-500 text-white text-xs flex items-center justify-center">✓</div>}
+            </button>
+          ))}
         </div>
+      )}
 
-        <Field label={L.emp.position} theme={theme}>
-          {!d.company_id ? (
-            <div className={`px-3 py-2.5 rounded-lg border ${theme.border} text-sm ${theme.textFaint}`}>
-              Əvvəlcə şirkət seçin
+      {step === 2 && (
+        <div className="space-y-3">
+          <div className={`text-sm font-semibold ${theme.textDim}`}>Hansı bölməyə işə götürürsünüz?</div>
+          <OrgTreePicker orgUnits={orgUnits} companyId={d.company_id}
+            selected={d.org_unit_id} onSelect={id => setD({ ...d, org_unit_id: id, position: '' })} theme={theme} />
+          {d.org_unit_id && (
+            <div className={`p-2.5 rounded-lg ${theme.surface2} border ${theme.border} text-xs flex items-center gap-2`}>
+              <span className="text-emerald-500 font-bold">✓</span>
+              <span className="font-semibold">{getOuPath(d.org_unit_id)}</span>
             </div>
-          ) : loadingPos ? (
-            <div className={`px-3 py-2.5 text-sm ${theme.textDim}`}>Yüklənir...</div>
-          ) : unitPositions.length === 0 ? (
-            <div className={`px-3 py-2.5 text-sm text-amber-500 border border-amber-500/30 rounded-lg bg-amber-500/5`}>
-              ⚠ Bu şirkət üçün vəzifə yoxdur. Əvvəlcə "Vəzifələr" bölməsindən yaradın.
-            </div>
-          ) : (
-            <select value={d.position}
-              onChange={e => setD({ ...d, position: e.target.value })}
-              className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`}>
-              <option value="">— vəzifə seçin —</option>
-              {unitPositions.map(p => (
-                <option key={p.id} value={p.name}>{p.name}</option>
-              ))}
-            </select>
           )}
-        </Field>
-
-        <div className="grid grid-cols-2 gap-3">
-          <Field label={`${L.emp.salary} (AZN)`} theme={theme}>
-            <input type="number" value={d.salary} onChange={e => setD({ ...d, salary: e.target.value })}
-              className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm tabular-nums`} />
-          </Field>
-          <Field label={L.emp.hireDate} theme={theme}>
-            <input type="date" value={d.start_date} onChange={e => setD({ ...d, start_date: e.target.value })}
-              className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`} />
-          </Field>
         </div>
+      )}
+
+      {step === 3 && (
+        <div className="space-y-4">
+          <div className={`p-3 rounded-xl ${theme.surface2} border ${theme.border} space-y-1 text-xs`}>
+            <div className="flex gap-2"><span className={theme.textFaint}>Şirkət:</span><span className="font-bold">{selectedCompany?.name_az}</span></div>
+            <div className="flex gap-2"><span className={theme.textFaint}>Bölmə:</span><span className="font-semibold">{getOuPath(d.org_unit_id)}</span></div>
+          </div>
+
+          <div>
+            <div className={`text-[11px] font-bold uppercase tracking-wider mb-1.5 ${theme.textDim}`}>{L.emp.name}</div>
+            <input value={d.full_name} onChange={e => setD({ ...d, full_name: e.target.value })}
+              placeholder="Ad Soyad" className={`w-full px-3 py-2.5 rounded-lg border ${theme.input} text-sm`} autoFocus />
+          </div>
+
+          <div>
+            <div className={`text-[11px] font-bold uppercase tracking-wider mb-1.5 ${theme.textDim}`}>{L.emp.position}</div>
+            {loadingPos ? (
+              <div className={`px-3 py-2.5 text-sm ${theme.textDim}`}>Yüklənir...</div>
+            ) : unitPositions.length === 0 ? (
+              <div className={`px-3 py-2.5 text-sm text-amber-500 border border-amber-500/30 rounded-lg bg-amber-500/5`}>
+                ⚠ Bu şirkət üçün vəzifə yoxdur. Əvvəlcə "Vəzifələr" bölməsindən yaradın.
+              </div>
+            ) : (
+              <div className="space-y-1.5 max-h-44 overflow-y-auto">
+                {unitPositions.map(pos => (
+                  <button key={pos.id} onClick={() => setD({ ...d, position: pos.name })}
+                    className={`w-full text-left px-3 py-2 rounded-lg border text-sm transition-all ${d.position === pos.name ? 'border-blue-500 bg-blue-500/5 font-semibold' : `${theme.border} hover:bg-blue-500/5`}`}>
+                    {pos.name}
+                    {d.position === pos.name && <span className="float-right text-blue-500">✓</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <div className={`text-[11px] font-bold uppercase tracking-wider mb-1.5 ${theme.textDim}`}>{L.emp.salary} (AZN)</div>
+              <input type="number" value={d.salary} onChange={e => setD({ ...d, salary: e.target.value })}
+                className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm tabular-nums`} />
+            </div>
+            <div>
+              <div className={`text-[11px] font-bold uppercase tracking-wider mb-1.5 ${theme.textDim}`}>{L.emp.hireDate}</div>
+              <input type="date" value={d.start_date} onChange={e => setD({ ...d, start_date: e.target.value })}
+                className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`} />
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="flex gap-2 mt-5">
+        {step > 1
+          ? <button onClick={() => setStep(step - 1)} className={`px-4 py-2 rounded-lg border ${theme.border} ${theme.hover} text-sm font-medium`}>← Geri</button>
+          : <button onClick={onClose} className={`px-4 py-2 rounded-lg border ${theme.border} ${theme.hover} text-sm font-medium`}>{L.actions.cancel}</button>}
+        <div className="flex-1" />
+        {step < 3
+          ? <button onClick={() => setStep(step + 1)} disabled={step === 1 ? !d.company_id : !d.org_unit_id}
+              className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white text-sm font-bold">İrəli →</button>
+          : <button onClick={() => onSave(d)} disabled={!valid}
+              className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white text-sm font-bold">{L.actions.save}</button>}
       </div>
-      <Buttons onSave={() => onSave(d)} onCancel={onClose} disabled={!valid} L={L} theme={theme} />
     </Modal>
   );
 }
