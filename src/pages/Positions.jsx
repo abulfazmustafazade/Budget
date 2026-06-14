@@ -1,112 +1,93 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { Plus, Edit2, Trash2, AlertTriangle, Briefcase, Users, Clock, CheckCircle, XCircle } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import {
+  Plus, Edit2, Trash2, AlertTriangle,
+  CheckCircle, XCircle, Clock, ChevronDown, ChevronRight,
+} from 'lucide-react';
 import { useApp } from '../contexts/AppContext';
 import { useCompanies, useOrgUnits } from '../hooks/useData';
 import { supabase } from '../lib/supabase';
 import { PageHeader, useTheme, Modal, Field, Buttons, FilterChip } from '../components/primitives';
-import { fmtMoney, hasPerm } from '../lib/permissions';
+import { hasPerm } from '../lib/permissions';
 
 export default function Positions() {
-  const { L, lang, dark, profile, perms } = useApp();
+  const { dark, profile, perms, lang } = useApp();
   const theme = useTheme(dark);
   const { data: companies } = useCompanies();
   const { data: orgUnits }  = useOrgUnits();
 
-  const [positionTypes, setPositionTypes]   = useState([]);
-  const [vacancySummary, setVacancySummary] = useState([]);
-  const [loading, setLoading]               = useState(true);
+  const [summary, setSummary]           = useState([]);
+  const [loading, setLoading]           = useState(true);
+  const [companyFilter, setCompanyFilter] = useState(null);
+  const [tab, setTab]                   = useState('list'); // 'list' | 'orgchart'
+  const [editing, setEditing]           = useState(null);
+  const [deleting, setDeleting]         = useState(null);
 
-  const [companyFilter, setCompanyFilter]   = useState(null);
-  const [tab, setTab]                       = useState('vacancies'); // 'vacancies' | 'types'
-
-  const [editType, setEditType]         = useState(null);
-  const [editHeadcount, setEditHeadcount] = useState(null);
-  const [delType, setDelType]           = useState(null);
-  const [delHc, setDelHc]               = useState(null);
-
-  const canManage = hasPerm(profile, perms, 'can_manage_structure') || profile?.is_admin;
+  const canManage = profile?.is_admin || hasPerm(profile, perms, 'can_manage_structure');
 
   const refresh = async () => {
     setLoading(true);
-    const [{ data: types }, { data: summary }] = await Promise.all([
-      supabase.from('position_types').select('*').order('name_az'),
-      supabase.rpc('get_position_vacancy_summary',
-        companyFilter ? { p_company_id: companyFilter } : {}
-      ),
-    ]);
-    setPositionTypes(types || []);
-    setVacancySummary(summary || []);
+    const { data } = await supabase.rpc('get_position_summary',
+      companyFilter ? { p_company_id: companyFilter } : {}
+    );
+    setSummary(data || []);
     setLoading(false);
   };
 
   useEffect(() => { refresh(); }, [companyFilter]);
 
-  // Boş vəzifələr — yalnız vacant_count > 0
-  const vacancies = useMemo(() =>
-    vacancySummary.filter(v => v.vacant_count > 0),
-    [vacancySummary]
-  );
-
-  // Ümumi statistika
+  // Statistika
   const stats = useMemo(() => ({
-    total:    vacancySummary.reduce((s, v) => s + v.planned_count, 0),
-    filled:   vacancySummary.reduce((s, v) => s + v.filled_count, 0),
-    vacant:   vacancySummary.reduce((s, v) => s + v.vacant_count, 0),
-    avgDays:  vacancies.length
-      ? Math.round(vacancies.reduce((s, v) => s + v.days_vacant, 0) / vacancies.length)
-      : 0,
-  }), [vacancySummary, vacancies]);
+    total:  summary.reduce((s, v) => s + v.planned_count, 0),
+    filled: summary.reduce((s, v) => s + v.filled_count,  0),
+    vacant: summary.reduce((s, v) => s + v.vacant_count,  0),
+    avgDays: (() => {
+      const vac = summary.filter(v => v.vacant_count > 0);
+      return vac.length ? Math.round(vac.reduce((s, v) => s + v.days_vacant, 0) / vac.length) : 0;
+    })(),
+  }), [summary]);
 
-  // Vəzifə tipi yarat/yenilə
-  const saveType = async (t) => {
-    if (t._new) {
-      const { error } = await supabase.from('position_types')
-        .insert({ name_az: t.name_az, name_en: t.name_en, description: t.description });
-      if (error) { alert(error.message); return; }
-    } else {
-      const { error } = await supabase.from('position_types')
-        .update({ name_az: t.name_az, name_en: t.name_en, description: t.description })
-        .eq('id', t.id);
-      if (error) { alert(error.message); return; }
-    }
-    setEditType(null);
-    refresh();
-  };
+  // Şirkət üçün kök vəzifələr (parent_id = null)
+  const positionsForCompany = (cId) => summary.filter(p => p.company_id === cId);
 
-  const saveHeadcount = async (h) => {
+  // Yarat
+  const save = async (p) => {
     const payload = {
-      org_unit_id:   h.org_unit_id,
-      company_id:    h.company_id,
-      planned_count: Number(h.planned_count),
-      opened_at:     h.opened_at,
-      notes:         h.notes || null,
-      position_name: h.position_name?.trim() || null,
-      manager_name:  h.manager_name?.trim() || null,
-      position_type_id: null,
+      company_id:    p.company_id,
+      org_unit_id:   p.org_unit_id || null,
+      parent_id:     p.parent_id   || null,
+      name:          p.name.trim(),
+      planned_count: Number(p.planned_count) || 1,
+      opened_at:     p.opened_at,
+      notes:         p.notes || null,
     };
-    if (h._new) {
-      const { error } = await supabase.from('position_headcounts').insert(payload);
+    if (p._new) {
+      const { error } = await supabase.from('positions').insert(payload);
       if (error) { alert(error.message); return; }
     } else {
-      const { error } = await supabase.from('position_headcounts')
-        .update(payload).eq('id', h.id);
+      const { error } = await supabase.from('positions').update(payload).eq('id', p.id);
       if (error) { alert(error.message); return; }
     }
-    setEditHeadcount(null);
+    setEditing(null);
     refresh();
   };
 
-  const deleteType = async () => {
-    const { error } = await supabase.from('position_types').delete().eq('id', delType.id);
+  const doDelete = async () => {
+    const { error } = await supabase.from('positions').delete().eq('id', deleting.position_id);
     if (error) { alert(error.message); return; }
-    setDelType(null); refresh();
+    setDeleting(null);
+    refresh();
   };
 
-  const deleteHc = async () => {
-    const { error } = await supabase.from('position_headcounts').delete().eq('id', delHc.id);
-    if (error) { alert(error.message); return; }
-    setDelHc(null); refresh();
-  };
+  const blankPosition = (companyId, parentId = null) => ({
+    _new: true,
+    company_id:    companyId || companies[0]?.id || '',
+    org_unit_id:   '',
+    parent_id:     parentId,
+    name:          '',
+    planned_count: 1,
+    opened_at:     new Date().toISOString().slice(0, 10),
+    notes:         '',
+  });
 
   return (
     <div className="space-y-6">
@@ -114,40 +95,44 @@ export default function Positions() {
         title="Vəzifələr"
         subtitle={`${stats.vacant} boş / ${stats.total} ümumi`}
         theme={theme}
-        action={canManage && (
-          <div className="flex gap-2">
-            <button
-              onClick={() => setEditHeadcount({ _new: true, position_type_id: '', position_name: '', manager_name: '', org_unit_id: '', company_id: companies[0]?.id || '', planned_count: 1, opened_at: new Date().toISOString().slice(0,10), notes: '' })}
-              className="px-3.5 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold flex items-center gap-1.5"
-            >
-              <Plus className="w-4 h-4" /> Vəzifə planı
-            </button>
-          </div>
+        action={canManage && companies.length > 0 && (
+          <button
+            onClick={() => setEditing(blankPosition(companyFilter || companies[0]?.id))}
+            className="px-3.5 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold flex items-center gap-1.5"
+          >
+            <Plus className="w-4 h-4" /> Vəzifə yarat
+          </button>
         )}
       />
 
-      {/* Statistika kartları */}
+      {/* Statistika */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <StatCard theme={theme} label="Ümumi plan" value={stats.total} icon={<Briefcase className="w-4 h-4" />} color="blue" />
-        <StatCard theme={theme} label="Dolu" value={stats.filled} icon={<CheckCircle className="w-4 h-4" />} color="emerald" />
-        <StatCard theme={theme} label="Boş" value={stats.vacant} icon={<XCircle className="w-4 h-4" />} color="rose" />
-        <StatCard theme={theme} label="Ort. boş gün" value={stats.avgDays} icon={<Clock className="w-4 h-4" />} color="amber" suffix=" gün" />
+        {[
+          { label: 'Ümumi plan', val: stats.total,   color: 'blue'   },
+          { label: 'Dolu',       val: stats.filled,  color: 'emerald'},
+          { label: 'Boş',        val: stats.vacant,  color: 'rose'   },
+          { label: 'Ort. boş gün', val: stats.avgDays, color: 'amber', suffix: ' gün' },
+        ].map(s => (
+          <div key={s.label} className={`${theme.surface} border ${theme.border} rounded-xl p-4`}>
+            <div className={`text-[11px] font-bold uppercase tracking-wider mb-1.5 ${theme.textDim}`}>{s.label}</div>
+            <div className={`text-2xl font-bold tabular-nums ${
+              s.color === 'blue'    ? 'text-blue-600 dark:text-blue-400' :
+              s.color === 'emerald' ? 'text-emerald-600 dark:text-emerald-400' :
+              s.color === 'rose'    ? 'text-rose-600 dark:text-rose-400' :
+              'text-amber-600 dark:text-amber-400'
+            }`}>{s.val}{s.suffix || ''}</div>
+          </div>
+        ))}
       </div>
 
-      {/* Tab keçidi */}
+      {/* Tab */}
       <div className={`flex gap-1 p-1 rounded-lg ${theme.surface2} border ${theme.border} w-fit`}>
-        {[
-          { id: 'vacancies', label: 'Boş vəzifələr' },
-          { id: 'all',       label: 'Hamısı' },
-          { id: 'types',     label: 'Vəzifə tipləri' },
-        ].map(t => (
-          <button key={t.id} onClick={() => setTab(t.id)}
-            className={`px-3 py-1.5 rounded-md text-sm font-semibold transition-colors ${
-              tab === t.id
-                ? `${theme.surface} shadow-sm ${theme.text}`
-                : theme.textDim
+        {[['list', 'Siyahı'], ['orgchart', 'Org Chart']].map(([id, label]) => (
+          <button key={id} onClick={() => setTab(id)}
+            className={`px-4 py-1.5 rounded-md text-sm font-semibold transition-colors ${
+              tab === id ? `${theme.surface} shadow-sm ${theme.text}` : theme.textDim
             }`}>
-            {t.label}
+            {label}
           </button>
         ))}
       </div>
@@ -155,9 +140,7 @@ export default function Positions() {
       {/* Şirkət filteri */}
       {companies.length > 1 && (
         <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
-          <FilterChip active={!companyFilter} onClick={() => setCompanyFilter(null)} theme={theme}>
-            Hamısı
-          </FilterChip>
+          <FilterChip active={!companyFilter} onClick={() => setCompanyFilter(null)} theme={theme}>Hamısı</FilterChip>
           {companies.map(c => (
             <FilterChip key={c.id} active={companyFilter === c.id} onClick={() => setCompanyFilter(c.id)} theme={theme}>
               {c.name_az}
@@ -166,540 +149,369 @@ export default function Positions() {
         </div>
       )}
 
-      {/* Boş vəzifələr / Hamısı */}
-      {(tab === 'vacancies' || tab === 'all') && (
-        <div className={`${theme.surface} border ${theme.border} rounded-xl overflow-hidden`}>
-          {loading ? (
-            <div className={`p-10 text-center text-sm ${theme.textDim}`}>Yüklənir...</div>
-          ) : (
-            <div className="divide-y divide-slate-200 dark:divide-slate-800">
-              {(tab === 'vacancies' ? vacancies : vacancySummary).map((v, i) => {
-                const isVacant = v.vacant_count > 0;
-                return (
-                  <div key={i} className={`p-4 flex items-start gap-4 ${theme.hover}`}>
-                    {/* Status icon */}
-                    <div className={`mt-0.5 w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
-                      isVacant ? 'bg-rose-500/10' : 'bg-emerald-500/10'
-                    }`}>
-                      {isVacant
-                        ? <XCircle className="w-4 h-4 text-rose-500" />
-                        : <CheckCircle className="w-4 h-4 text-emerald-500" />}
-                    </div>
-
-                    {/* Məlumat */}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-start justify-between gap-2 flex-wrap">
-                        <div>
-                          <div className="font-semibold text-sm">{v.position_name_az}</div>
-                          <div className={`text-xs ${theme.textDim} mt-0.5`}>
-                            {v.company_name_az} · {v.org_unit_name_az}
-                          </div>
-                        </div>
-
-                        {/* Say göstəricisi */}
-                        <div className="flex items-center gap-3 shrink-0">
-                          <div className="text-center">
-                            <div className="text-xs font-bold tabular-nums">{v.filled_count}/{v.planned_count}</div>
-                            <div className={`text-[10px] ${theme.textFaint}`}>dolu/plan</div>
-                          </div>
-                          {isVacant && (
-                            <div className={`px-2 py-1 rounded-lg bg-rose-500/10 text-rose-600 dark:text-rose-400 text-center`}>
-                              <div className="text-sm font-bold tabular-nums">{v.vacant_count}</div>
-                              <div className="text-[10px]">boş</div>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Progress bar */}
-                      <div className="mt-2.5 flex items-center gap-2">
-                        <div className={`flex-1 h-1.5 rounded-full ${theme.surface2} overflow-hidden`}>
-                          <div
-                            className={`h-full rounded-full ${isVacant ? 'bg-rose-400' : 'bg-emerald-500'}`}
-                            style={{ width: `${v.planned_count > 0 ? (v.filled_count / v.planned_count) * 100 : 0}%` }}
-                          />
-                        </div>
-
-                        {/* Boş qalan gün */}
-                        {isVacant && v.days_vacant > 0 && (
-                          <div className={`flex items-center gap-1 text-xs ${
-                            v.days_vacant > 90 ? 'text-rose-500' :
-                            v.days_vacant > 30 ? 'text-amber-500' : theme.textFaint
-                          }`}>
-                            <Clock className="w-3 h-3" />
-                            <span className="tabular-nums">{v.days_vacant} gün</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Redaktə */}
-                    {canManage && (
-                      <button
-                        onClick={async () => {
-                          const { data } = await supabase
-                            .from('position_headcounts')
-                            .select('*')
-                            .eq('id', v.headcount_id)
-                            .single();
-                          if (data) setEditHeadcount({ ...data, position_name: data.position_name || v.position_name_az });
-                        }}
-                        className={`p-1.5 rounded-md ${theme.hover} shrink-0`}
-                      >
-                        <Edit2 className="w-4 h-4" />
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-
-              {(tab === 'vacancies' ? vacancies : vacancySummary).length === 0 && (
-                <div className={`p-10 text-center text-sm ${theme.textDim}`}>
-                  {tab === 'vacancies' ? '✓ Bütün vəzifələr doludur' : 'Heç bir vəzifə planı yoxdur'}
+      {loading ? (
+        <div className={`text-sm ${theme.textDim} text-center py-10`}>Yüklənir...</div>
+      ) : tab === 'list' ? (
+        /* ── Siyahı görünüşü ── */
+        <div className="space-y-4">
+          {companies.filter(c => !companyFilter || c.id === companyFilter).map(c => {
+            const cPositions = positionsForCompany(c.id);
+            if (!cPositions.length && companyFilter) return null;
+            return (
+              <div key={c.id} className={`${theme.surface} border ${theme.border} rounded-xl overflow-hidden`}>
+                <div className={`px-4 py-3 ${theme.surface2} flex items-center justify-between border-b ${theme.border}`}>
+                  <span className="font-bold text-sm">{c.name_az}</span>
+                  {canManage && (
+                    <button onClick={() => setEditing(blankPosition(c.id))}
+                      className={`text-xs px-2 py-1 rounded border ${theme.border} ${theme.hover} flex items-center gap-1`}>
+                      <Plus className="w-3 h-3" /> Vəzifə yarat
+                    </button>
+                  )}
                 </div>
-              )}
-            </div>
-          )}
+                {cPositions.length === 0 ? (
+                  <div className={`p-8 text-center text-sm ${theme.textDim}`}>Hələ vəzifə yoxdur</div>
+                ) : (
+                  <PositionTree
+                    positions={cPositions}
+                    parentId={null}
+                    depth={0}
+                    theme={theme}
+                    canManage={canManage}
+                    onEdit={p => setEditing({ ...p, _edit: true })}
+                    onDelete={p => setDeleting(p)}
+                    onAddChild={p => setEditing(blankPosition(p.company_id, p.position_id))}
+                  />
+                )}
+              </div>
+            );
+          })}
         </div>
-      )}
-
-      {/* Vəzifə tipləri */}
-      {tab === 'types' && (
-        <div className="space-y-3">
-          {canManage && (
-            <button
-              onClick={() => setEditType({ _new: true, name_az: '', name_en: '', description: '' })}
-              className={`w-full py-2.5 rounded-lg border-2 border-dashed ${theme.border} ${theme.textDim} text-sm ${theme.hover} flex items-center justify-center gap-2`}
-            >
-              <Plus className="w-4 h-4" /> Yeni vəzifə tipi
-            </button>
+      ) : (
+        /* ── Org Chart görünüşü ── */
+        <div className="space-y-8">
+          {companies.filter(c => !companyFilter || c.id === companyFilter).map(c => {
+            const cPositions = positionsForCompany(c.id);
+            if (!cPositions.length) return null;
+            return (
+              <div key={c.id}>
+                <div className={`text-sm font-bold mb-4 ${theme.textDim}`}>{c.name_az}</div>
+                <div className="overflow-x-auto pb-4">
+                  <OrgChart
+                    positions={cPositions}
+                    parentId={null}
+                    theme={theme}
+                    canManage={canManage}
+                    onEdit={p => setEditing({ ...p, _edit: true })}
+                    onAddChild={p => setEditing(blankPosition(p.company_id, p.position_id))}
+                  />
+                </div>
+              </div>
+            );
+          })}
+          {summary.length === 0 && (
+            <div className={`text-sm ${theme.textDim} text-center py-10`}>Hələ vəzifə yoxdur</div>
           )}
-          <div className={`${theme.surface} border ${theme.border} rounded-xl overflow-hidden`}>
-            <div className="divide-y divide-slate-200 dark:divide-slate-800">
-              {positionTypes.map(pt => {
-                const managerPt = positionTypes.find(p => p.id === pt.manager_position_type_id);
-                return (
-                  <div key={pt.id} className={`px-4 py-3 flex items-center justify-between gap-3 ${theme.hover}`}>
-                    <div>
-                      <div className="font-semibold text-sm">{pt.name_az}</div>
-                      {pt.name_en && <div className={`text-xs ${theme.textDim}`}>{pt.name_en}</div>}
-                      {managerPt && (
-                        <div className={`text-xs mt-0.5 flex items-center gap-1`}>
-                          <span className={theme.textFaint}>Rəhbər:</span>
-                          <span className="text-blue-500 font-medium">{managerPt.name_az}</span>
-                        </div>
-                      )}
-                      {pt.description && <div className={`text-xs ${theme.textFaint} mt-0.5`}>{pt.description}</div>}
-                    </div>
-                    {canManage && (
-                      <div className="flex gap-1 shrink-0">
-                        <button onClick={() => setEditType({ ...pt })} className={`p-1.5 rounded-md ${theme.hover}`}>
-                          <Edit2 className="w-4 h-4" />
-                        </button>
-                        <button onClick={() => setDelType(pt)} className={`p-1.5 rounded-md ${theme.hover} text-rose-500`}>
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-              {positionTypes.length === 0 && (
-                <div className={`p-8 text-center text-sm ${theme.textDim}`}>Hələ vəzifə tipi yoxdur</div>
-              )}
-            </div>
-          </div>
         </div>
       )}
 
       {/* Modallar */}
-      {editType && (
-        <PositionTypeModal theme={theme} type={editType} positionTypes={positionTypes} onSave={saveType} onClose={() => setEditType(null)} />
-      )}
-      {editHeadcount && (
-        <HeadcountModal
-          theme={theme} lang={lang} headcount={editHeadcount}
-          positionTypes={positionTypes} companies={companies} orgUnits={orgUnits}
-          onSave={saveHeadcount} onClose={() => setEditHeadcount(null)}
+      {editing && (
+        <PositionModal
+          theme={theme}
+          position={editing}
+          companies={companies}
+          orgUnits={orgUnits}
+          parentOptions={summary}
+          onSave={save}
+          onClose={() => setEditing(null)}
         />
       )}
-      {delType && (
-        <ConfirmModal theme={theme} title={delType.name_az} onConfirm={deleteType} onClose={() => setDelType(null)} />
-      )}
-      {delHc && (
-        <ConfirmModal theme={theme} title={`${delHc.position_name_az} planını sil`} onConfirm={deleteHc} onClose={() => setDelHc(null)} />
+      {deleting && (
+        <Modal onClose={() => setDeleting(null)} theme={theme} title="Vəzifəni sil?">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-full bg-rose-500/10 flex items-center justify-center shrink-0">
+              <AlertTriangle className="w-5 h-5 text-rose-500" />
+            </div>
+            <div>
+              <div className="font-semibold">{deleting.position_name}</div>
+              <div className={`text-xs ${theme.textDim} mt-1`}>Bu vəzifə silinəcək. Geri qaytarıla bilməz.</div>
+            </div>
+          </div>
+          <div className="flex gap-2 mt-5">
+            <button onClick={doDelete} className="flex-1 px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-sm font-bold">Sil</button>
+            <button onClick={() => setDeleting(null)} className={`px-4 py-2 rounded-lg border ${theme.border} ${theme.hover} text-sm`}>Ləğv et</button>
+          </div>
+        </Modal>
       )}
     </div>
   );
 }
 
-// ─── Stat kartı ──────────────────────────────────────────────────────────────
-function StatCard({ theme, label, value, icon, color, suffix = '' }) {
-  const colors = {
-    blue:   'text-blue-600 dark:text-blue-400',
-    emerald:'text-emerald-600 dark:text-emerald-400',
-    rose:   'text-rose-600 dark:text-rose-400',
-    amber:  'text-amber-600 dark:text-amber-400',
-  };
-  return (
-    <div className={`${theme.surface} border ${theme.border} rounded-xl p-4`}>
-      <div className={`flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider mb-2 ${theme.textDim}`}>
-        {icon} {label}
-      </div>
-      <div className={`text-2xl font-bold tabular-nums ${colors[color]}`}>
-        {value}{suffix}
-      </div>
-    </div>
-  );
-}
-
-// ─── Vəzifə tipi modal ───────────────────────────────────────────────────────
-function PositionTypeModal({ theme, type, positionTypes, onSave, onClose }) {
-  const [t, setT] = useState(type);
-  const valid = t.name_az && t.name_en;
-  const L = { actions: { save: 'Yadda saxla', cancel: 'Ləğv et' } };
-
-  // Özünü rəhbər kimi seçməsin
-  const managerOptions = positionTypes.filter(p => p.id !== t.id);
-
-  return (
-    <Modal onClose={onClose} theme={theme} title={t._new ? 'Yeni vəzifə tipi' : 'Vəzifə tipini redaktə et'}>
-      <div className="space-y-3">
-        <Field label="Ad (Azərbaycan)" theme={theme}>
-          <input value={t.name_az} onChange={e => setT({ ...t, name_az: e.target.value })}
-            className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`} autoFocus />
-        </Field>
-        <Field label="Ad (İngilis)" theme={theme}>
-          <input value={t.name_en} onChange={e => setT({ ...t, name_en: e.target.value })}
-            className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`} />
-        </Field>
-        <Field label="Birbaşa rəhbər vəzifəsi" theme={theme}>
-          <select
-            value={t.manager_position_type_id || ''}
-            onChange={e => setT({ ...t, manager_position_type_id: e.target.value || null })}
-            className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`}
-          >
-            <option value="">— rəhbər yoxdur —</option>
-            {managerOptions.map(p => (
-              <option key={p.id} value={p.id}>{p.name_az}</option>
-            ))}
-          </select>
-          <div className={`text-[11px] mt-1 ${theme.textFaint}`}>
-            Məs: "Data Analitik" → rəhbəri "Şöbə Müdiri"
-          </div>
-        </Field>
-        <Field label="Qeyd (istəyə bağlı)" theme={theme}>
-          <textarea value={t.description || ''} onChange={e => setT({ ...t, description: e.target.value })}
-            rows={2} className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm resize-none`} />
-        </Field>
-      </div>
-      <Buttons onSave={() => onSave(t)} onCancel={onClose} disabled={!valid} L={L} theme={theme} />
-    </Modal>
-  );
-}
-
-// ─── Headcount Wizard — addım-addım ──────────────────────────────────────────
-function HeadcountModal({ theme, lang, headcount, positionTypes, companies, orgUnits, onSave, onClose }) {
-  const isEdit = !headcount._new;
-
-  // Redaktə rejimində birbaşa addım 3-dən başla
-  const [step, setStep] = useState(isEdit ? 3 : 1);
-
-  const [h, setH] = useState({
-    company_id:       headcount.company_id || companies[0]?.id || '',
-    org_unit_id:      headcount.org_unit_id || '',
-    position_type_id: headcount.position_type_id || '',
-    planned_count:    headcount.planned_count || 1,
-    opened_at:        headcount.opened_at || new Date().toISOString().slice(0, 10),
-    notes:            headcount.notes || '',
-    id:               headcount.id,
-    _new:             headcount._new,
-  });
-
-  // Seçilmiş şirkətin org unitləri — ağac qur
-  const companyOrgUnits = orgUnits.filter(u => u.company_id === h.company_id);
-
-  // Org unit ağacı qurmaq üçün yardımçı
-  const buildTree = (parentId = null) =>
-    companyOrgUnits
-      .filter(u => u.parent_id === parentId)
-      .map(u => ({ ...u, children: buildTree(u.id) }));
-
-  const tree = buildTree(null);
-
-  // Seçilmiş org unitin tam yolu
-  const getPath = (unitId) => {
-    const path = [];
-    let cur = orgUnits.find(u => u.id === unitId);
-    while (cur) { path.unshift(cur.name_az); cur = orgUnits.find(u => u.id === cur.parent_id); }
-    return path;
-  };
-
-  const selectedOu      = orgUnits.find(u => u.id === h.org_unit_id);
-  const selectedPt      = positionTypes.find(p => p.id === h.position_type_id);
-  const managerPt       = positionTypes.find(p => p.id === selectedPt?.manager_position_type_id);
-  const ouPath          = h.org_unit_id ? getPath(h.org_unit_id) : [];
-
-  const LEVEL_COLORS = {
-    division:       'bg-blue-500/10 text-blue-600 dark:text-blue-400',
-    department:     'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
-    sub_department: 'bg-purple-500/10 text-purple-500',
-    unit:           'bg-amber-500/10 text-amber-600',
-    sub_unit:       'bg-slate-500/10 text-slate-500',
-  };
-
-  const LEVEL_NAMES = {
-    division: 'Bölmə', department: 'Departament',
-    sub_department: 'Alt-departament', unit: 'Şöbə', sub_unit: 'Alt-şöbə',
-  };
-
-  const valid = h.company_id && h.org_unit_id && h.position_name?.trim() && h.planned_count > 0;
-
-  // Addım başlıqları
-  const steps = ['Şirkət', 'Struktur', 'Vəzifə'];
-
-  return (
-    <Modal onClose={onClose} theme={theme} title={isEdit ? 'Vəzifə planını redaktə et' : 'Vəzifə planı yarat'} wide>
-
-      {/* Progress bar — yalnız yeni yaradanda */}
-      {!isEdit && (
-        <div className="flex items-center gap-2 mb-6">
-          {steps.map((s, i) => {
-            const n = i + 1;
-            const done   = step > n;
-            const active = step === n;
-            return (
-              <React.Fragment key={n}>
-                <div className="flex items-center gap-1.5">
-                  <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold transition-colors ${
-                    done   ? 'bg-emerald-500 text-white' :
-                    active ? 'bg-blue-600 text-white' :
-                    `${theme.surface2} border ${theme.border} ${theme.textFaint}`
-                  }`}>
-                    {done ? '✓' : n}
-                  </div>
-                  <span className={`text-xs font-semibold ${active ? theme.text : theme.textFaint}`}>{s}</span>
-                </div>
-                {i < steps.length - 1 && (
-                  <div className={`flex-1 h-px ${step > n ? 'bg-emerald-500' : theme.border} border-0 bg-current`} />
-                )}
-              </React.Fragment>
-            );
-          })}
-        </div>
-      )}
-
-      {/* ── Addım 1: Şirkət ── */}
-      {step === 1 && (
-        <div className="space-y-2">
-          <div className={`text-sm font-semibold mb-3 ${theme.textDim}`}>Hansı şirkət üçün vəzifə planı yaradırsınız?</div>
-          {companies.map(c => (
-            <button key={c.id}
-              onClick={() => { setH({ ...h, company_id: c.id, org_unit_id: '' }); setStep(2); }}
-              className={`w-full text-left px-4 py-3 rounded-xl border-2 transition-all flex items-center justify-between ${
-                h.company_id === c.id
-                  ? 'border-blue-500 bg-blue-500/5'
-                  : `${theme.border} ${theme.hover}`
-              }`}>
-              <div>
-                <div className="font-bold">{c.name_az}</div>
-                <div className={`text-xs ${theme.textDim} mt-0.5`}>{c.name_en}</div>
-              </div>
-              {h.company_id === c.id && <div className="w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center text-white text-xs">✓</div>}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* ── Addım 2: Struktur (ağac) ── */}
-      {step === 2 && (
-        <div>
-          <div className={`text-sm font-semibold mb-3 ${theme.textDim}`}>
-            Hansı bölməyə vəzifə planı əlavə edilsin?
-          </div>
-          <div className={`rounded-xl border ${theme.border} overflow-hidden max-h-80 overflow-y-auto`}>
-            {tree.length === 0 ? (
-              <div className={`p-6 text-center text-sm ${theme.textDim}`}>
-                Bu şirkətin strukturu yoxdur. Əvvəlcə "Struktur" bölməsindən bölmə yaradın.
-              </div>
-            ) : (
-              tree.map(u => (
-                <OrgTreeRow key={u.id} unit={u} depth={0}
-                  selected={h.org_unit_id}
-                  onSelect={(id) => setH({ ...h, org_unit_id: id })}
-                  theme={theme} levelColors={LEVEL_COLORS} levelNames={LEVEL_NAMES} />
-              ))
-            )}
-          </div>
-          {h.org_unit_id && (
-            <div className={`mt-3 p-2.5 rounded-lg ${theme.surface2} border ${theme.border} text-xs flex items-center gap-2`}>
-              <span className="text-emerald-500">✓</span>
-              <span className={theme.textDim}>Seçildi:</span>
-              <span className="font-semibold">{ouPath.join(' › ')}</span>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ── Addım 3: Vəzifə detalları ── */}
-      {step === 3 && (
-        <div className="space-y-4">
-          {/* Xülasə: şirkət + bölmə */}
-          {!isEdit && (
-            <div className={`p-3 rounded-xl ${theme.surface2} border ${theme.border} space-y-1`}>
-              <div className="flex items-center gap-2 text-xs">
-                <span className={theme.textFaint}>Şirkət:</span>
-                <span className="font-semibold">{companies.find(c => c.id === h.company_id)?.name_az}</span>
-              </div>
-              <div className="flex items-start gap-2 text-xs">
-                <span className={theme.textFaint}>Bölmə:</span>
-                <span className="font-semibold">{ouPath.join(' › ')}</span>
-              </div>
-            </div>
-          )}
-
-          {/* Vəzifə adı — sərbəst yazılır */}
-          <div>
-            <div className={`text-[11px] font-bold uppercase tracking-wider mb-2 ${theme.textDim}`}>Vəzifə adı</div>
-            <input
-              value={h.position_name || ''}
-              onChange={e => setH({ ...h, position_name: e.target.value })}
-              placeholder="Məs: Data Analitik, Baş Mütəxəssis..."
-              className={`w-full px-3 py-2.5 rounded-lg border ${theme.input} text-sm`}
-              autoFocus
-            />
-          </div>
-
-          {/* Rəhbər vəzifəsi — sərbəst yazılır */}
-          <div>
-            <div className={`text-[11px] font-bold uppercase tracking-wider mb-2 ${theme.textDim}`}>Birbaşa rəhbər vəzifəsi <span className={theme.textFaint}>(istəyə bağlı)</span></div>
-            <input
-              value={h.manager_name || ''}
-              onChange={e => setH({ ...h, manager_name: e.target.value })}
-              placeholder="Məs: Şöbə Müdiri, Departament Direktoru..."
-              className={`w-full px-3 py-2.5 rounded-lg border ${theme.input} text-sm`}
-            />
-          </div>
-
-          {/* Plan say + tarix */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <div className={`text-[11px] font-bold uppercase tracking-wider mb-1.5 ${theme.textDim}`}>Plan say</div>
-              <div className="flex items-center gap-2">
-                <button onClick={() => setH({ ...h, planned_count: Math.max(1, h.planned_count - 1) })}
-                  className={`w-8 h-8 rounded-lg border ${theme.border} ${theme.hover} font-bold text-lg flex items-center justify-center`}>−</button>
-                <span className="text-xl font-bold tabular-nums w-8 text-center">{h.planned_count}</span>
-                <button onClick={() => setH({ ...h, planned_count: h.planned_count + 1 })}
-                  className={`w-8 h-8 rounded-lg border ${theme.border} ${theme.hover} font-bold text-lg flex items-center justify-center`}>+</button>
-              </div>
-            </div>
-            <div>
-              <div className={`text-[11px] font-bold uppercase tracking-wider mb-1.5 ${theme.textDim}`}>Açılış tarixi</div>
-              <input type="date" value={h.opened_at}
-                onChange={e => setH({ ...h, opened_at: e.target.value })}
-                className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`} />
-            </div>
-          </div>
-
-          {/* Qeyd */}
-          <div>
-            <div className={`text-[11px] font-bold uppercase tracking-wider mb-1.5 ${theme.textDim}`}>Qeyd (istəyə bağlı)</div>
-            <textarea value={h.notes} onChange={e => setH({ ...h, notes: e.target.value })}
-              rows={2} className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm resize-none`} />
-          </div>
-        </div>
-      )}
-
-      {/* Alt naviqasiya */}
-      <div className="flex gap-2 mt-5">
-        {step > 1 && !isEdit && (
-          <button onClick={() => setStep(step - 1)}
-            className={`px-4 py-2 rounded-lg border ${theme.border} ${theme.hover} text-sm font-medium`}>
-            ← Geri
-          </button>
-        )}
-        <button onClick={onClose}
-          className={`px-4 py-2 rounded-lg border ${theme.border} ${theme.hover} text-sm font-medium ${step === 1 || isEdit ? '' : 'hidden'}`}>
-          Ləğv et
-        </button>
-        <div className="flex-1" />
-        {step < 3 ? (
-          <button
-            onClick={() => setStep(step + 1)}
-            disabled={step === 1 ? !h.company_id : !h.org_unit_id}
-            className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white text-sm font-bold"
-          >
-            İrəli →
-          </button>
-        ) : (
-          <button
-            onClick={() => onSave(h)}
-            disabled={!valid}
-            className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white text-sm font-bold"
-          >
-            Yadda saxla
-          </button>
-        )}
-      </div>
-    </Modal>
-  );
-}
-
-// ─── Org ağac sırası ──────────────────────────────────────────────────────────
-function OrgTreeRow({ unit, depth, selected, onSelect, theme, levelColors, levelNames }) {
-  const [open, setOpen] = useState(depth < 2);
-  const hasChildren = unit.children?.length > 0;
-  const isSelected  = selected === unit.id;
+// ─── Siyahı ağacı ────────────────────────────────────────────────────────────
+function PositionTree({ positions, parentId, depth, theme, canManage, onEdit, onDelete, onAddChild }) {
+  const children = positions.filter(p => p.parent_id === parentId);
+  if (!children.length) return null;
 
   return (
     <>
-      <button
-        onClick={() => onSelect(unit.id)}
-        className={`w-full text-left flex items-center gap-2 px-3 py-2.5 border-b ${theme.border} last:border-0 transition-colors ${
-          isSelected ? 'bg-blue-500/10' : `hover:bg-blue-500/5`
-        }`}
-        style={{ paddingLeft: `${12 + depth * 20}px` }}
-      >
-        {hasChildren ? (
-          <span onClick={e => { e.stopPropagation(); setOpen(!open); }}
-            className={`w-4 h-4 flex items-center justify-center ${theme.textFaint} hover:text-current`}>
-            {open ? '▾' : '▸'}
-          </span>
-        ) : (
-          <span className="w-4" />
-        )}
-        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${levelColors[unit.level]}`}>
-          {levelNames[unit.level]}
-        </span>
-        <span className={`text-sm flex-1 ${isSelected ? 'font-bold' : ''}`}>{unit.name_az}</span>
-        {isSelected && <span className="text-blue-500 text-xs font-bold">✓</span>}
-      </button>
-      {open && hasChildren && unit.children.map(child => (
-        <OrgTreeRow key={child.id} unit={child} depth={depth + 1}
-          selected={selected} onSelect={onSelect}
-          theme={theme} levelColors={levelColors} levelNames={levelNames} />
-      ))}
+      {children.map(p => {
+        const isVacant = p.vacant_count > 0;
+        return (
+          <React.Fragment key={p.position_id}>
+            <div
+              className={`flex items-center gap-3 px-4 py-3 border-t ${theme.border} hover:bg-blue-500/5`}
+              style={{ paddingLeft: `${16 + depth * 24}px` }}
+            >
+              {/* Boşluq/xətt göstəricisi */}
+              {depth > 0 && (
+                <span className={`text-xs ${theme.textFaint}`}>└</span>
+              )}
+
+              {/* Status */}
+              <div className={`w-2 h-2 rounded-full shrink-0 ${isVacant ? 'bg-rose-500' : 'bg-emerald-500'}`} />
+
+              {/* Ad */}
+              <div className="flex-1 min-w-0">
+                <div className="font-semibold text-sm">{p.position_name}</div>
+                {p.org_unit_name && (
+                  <div className={`text-[11px] ${theme.textFaint}`}>{p.parent_name ? `→ ${p.parent_name}` : ''} · {p.org_unit_name}</div>
+                )}
+                {p.parent_name && !p.org_unit_name && (
+                  <div className={`text-[11px] ${theme.textFaint}`}>→ {p.parent_name}</div>
+                )}
+              </div>
+
+              {/* Say */}
+              <div className="flex items-center gap-2 shrink-0">
+                <span className={`text-xs tabular-nums font-semibold ${isVacant ? 'text-rose-500' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                  {p.filled_count}/{p.planned_count}
+                </span>
+                {isVacant && p.days_vacant > 0 && (
+                  <span className={`flex items-center gap-0.5 text-[11px] tabular-nums ${
+                    p.days_vacant > 90 ? 'text-rose-500' : p.days_vacant > 30 ? 'text-amber-500' : theme.textFaint
+                  }`}>
+                    <Clock className="w-3 h-3" />{p.days_vacant}g
+                  </span>
+                )}
+              </div>
+
+              {/* Əməliyyatlar */}
+              {canManage && (
+                <div className="flex gap-0.5">
+                  <button onClick={() => onAddChild(p)} className={`p-1 rounded ${theme.hover}`} title="Alt vəzifə yarat">
+                    <Plus className="w-3.5 h-3.5" />
+                  </button>
+                  <button onClick={() => onEdit(p)} className={`p-1 rounded ${theme.hover}`}>
+                    <Edit2 className="w-3.5 h-3.5" />
+                  </button>
+                  <button onClick={() => onDelete(p)} className={`p-1 rounded ${theme.hover} text-rose-500`}>
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+            </div>
+            <PositionTree
+              positions={positions} parentId={p.position_id} depth={depth + 1}
+              theme={theme} canManage={canManage}
+              onEdit={onEdit} onDelete={onDelete} onAddChild={onAddChild}
+            />
+          </React.Fragment>
+        );
+      })}
     </>
   );
 }
 
-// ─── Silmə təsdiqi ───────────────────────────────────────────────────────────
-function ConfirmModal({ theme, title, onConfirm, onClose }) {
+// ─── Org Chart ───────────────────────────────────────────────────────────────
+function OrgChart({ positions, parentId, theme, canManage, onEdit, onAddChild }) {
+  const children = positions.filter(p => p.parent_id === parentId);
+  if (!children.length) return null;
+
   return (
-    <Modal onClose={onClose} theme={theme} title="Silinsin?">
-      <div className="flex items-start gap-3">
-        <div className="w-10 h-10 rounded-full bg-rose-500/10 flex items-center justify-center shrink-0">
-          <AlertTriangle className="w-5 h-5 text-rose-500" />
+    <div className="flex gap-6 justify-center">
+      {children.map(p => {
+        const isVacant   = p.vacant_count > 0;
+        const hasChildren = positions.some(x => x.parent_id === p.position_id);
+
+        return (
+          <div key={p.position_id} className="flex flex-col items-center">
+            {/* Kart */}
+            <div className={`relative group w-44 rounded-xl border-2 p-3 text-center transition-all ${
+              isVacant
+                ? `border-rose-400 bg-rose-500/5`
+                : `border-emerald-400 bg-emerald-500/5`
+            }`}>
+              {/* Əməliyyat düymələri — hover-da görünür */}
+              {canManage && (
+                <div className="absolute -top-2 -right-2 hidden group-hover:flex gap-0.5 bg-white dark:bg-slate-800 rounded-lg shadow border border-slate-200 dark:border-slate-700 p-0.5">
+                  <button onClick={() => onAddChild(p)} className={`p-1 rounded ${theme.hover}`} title="Alt vəzifə">
+                    <Plus className="w-3 h-3" />
+                  </button>
+                  <button onClick={() => onEdit(p)} className={`p-1 rounded ${theme.hover}`}>
+                    <Edit2 className="w-3 h-3" />
+                  </button>
+                </div>
+              )}
+
+              {/* Vəzifə adı */}
+              <div className="font-bold text-sm leading-tight mb-2">{p.position_name}</div>
+
+              {/* Say göstəricisi */}
+              <div className="flex items-center justify-center gap-1.5">
+                <div className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-semibold ${
+                  isVacant
+                    ? 'bg-rose-500/15 text-rose-600 dark:text-rose-400'
+                    : 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                }`}>
+                  {isVacant ? <XCircle className="w-3 h-3" /> : <CheckCircle className="w-3 h-3" />}
+                  <span className="tabular-nums">{p.filled_count}/{p.planned_count}</span>
+                </div>
+              </div>
+
+              {/* Boş gün */}
+              {isVacant && p.days_vacant > 0 && (
+                <div className={`mt-1 text-[10px] flex items-center justify-center gap-0.5 ${
+                  p.days_vacant > 90 ? 'text-rose-500' : p.days_vacant > 30 ? 'text-amber-500' : theme.textFaint
+                }`}>
+                  <Clock className="w-2.5 h-2.5" />
+                  <span className="tabular-nums">{p.days_vacant} gün boşdur</span>
+                </div>
+              )}
+
+              {/* Org unit */}
+              {p.org_unit_name && (
+                <div className={`mt-1.5 text-[10px] ${theme.textFaint} truncate`}>{p.org_unit_name}</div>
+              )}
+            </div>
+
+            {/* Övlad bağlantısı */}
+            {hasChildren && (
+              <>
+                <div className={`w-px h-5 ${theme.border} border-l-2 border-dashed`} />
+                <OrgChart
+                  positions={positions} parentId={p.position_id}
+                  theme={theme} canManage={canManage}
+                  onEdit={onEdit} onAddChild={onAddChild}
+                />
+              </>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Vəzifə modal ────────────────────────────────────────────────────────────
+function PositionModal({ theme, position, companies, orgUnits, parentOptions, onSave, onClose }) {
+  const isEdit = !!position._edit;
+  const [p, setP] = useState({
+    id:            position.position_id,
+    company_id:    position.company_id    || companies[0]?.id || '',
+    org_unit_id:   position.org_unit_id   || '',
+    parent_id:     position.parent_id     || '',
+    name:          position.position_name || position.name || '',
+    planned_count: position.planned_count || 1,
+    opened_at:     position.opened_at     || new Date().toISOString().slice(0, 10),
+    notes:         position.notes         || '',
+    _new:          !isEdit,
+  });
+
+  const filteredOus      = orgUnits.filter(u => u.company_id === p.company_id);
+  const parentCandidates = parentOptions.filter(x =>
+    x.company_id === p.company_id && x.position_id !== p.id
+  );
+  const selectedParent   = parentOptions.find(x => x.position_id === p.parent_id);
+  const valid            = p.name.trim() && p.company_id && p.planned_count > 0;
+
+  const L = { actions: { save: 'Yadda saxla', cancel: 'Ləğv et' } };
+
+  return (
+    <Modal onClose={onClose} theme={theme} title={isEdit ? `"${p.name}" — redaktə` : 'Yeni vəzifə yarat'}>
+      <div className="space-y-3">
+
+        {/* Şirkət — yalnız yeni yaradanda */}
+        {!isEdit && (
+          <Field label="Şirkət" theme={theme}>
+            <select value={p.company_id}
+              onChange={e => setP({ ...p, company_id: e.target.value, org_unit_id: '', parent_id: '' })}
+              className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`}>
+              {companies.map(c => <option key={c.id} value={c.id}>{c.name_az}</option>)}
+            </select>
+          </Field>
+        )}
+
+        {/* Vəzifə adı */}
+        <Field label="Vəzifə adı" theme={theme}>
+          <input
+            value={p.name}
+            onChange={e => setP({ ...p, name: e.target.value })}
+            placeholder="Məs: Data Analitik, Direktor, Mühasib..."
+            className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`}
+            autoFocus
+          />
+        </Field>
+
+        {/* Kimə bağlıdır (rəhbər vəzifəsi) */}
+        <Field label="Kimə bağlıdır (rəhbər)" theme={theme}>
+          <select
+            value={p.parent_id || ''}
+            onChange={e => setP({ ...p, parent_id: e.target.value || null })}
+            className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`}
+          >
+            <option value="">— kök vəzifədir (heç kimə bağlı deyil) —</option>
+            {parentCandidates.map(x => (
+              <option key={x.position_id} value={x.position_id}>
+                {Array(x.depth).fill('·').join(' ')} {x.position_name}
+              </option>
+            ))}
+          </select>
+          {selectedParent && (
+            <div className={`text-[11px] mt-1 ${theme.textFaint}`}>
+              Birbaşa rəhbər: <span className="text-blue-500 font-semibold">{selectedParent.position_name}</span>
+            </div>
+          )}
+        </Field>
+
+        {/* Bölmə */}
+        <Field label="Bölmə (istəyə bağlı)" theme={theme}>
+          <select
+            value={p.org_unit_id || ''}
+            onChange={e => setP({ ...p, org_unit_id: e.target.value || null })}
+            className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`}
+          >
+            <option value="">— bölməyə bağlamadan —</option>
+            {filteredOus.map(u => (
+              <option key={u.id} value={u.id}>{u.name_az}</option>
+            ))}
+          </select>
+        </Field>
+
+        {/* Plan say + tarix */}
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Plan say" theme={theme}>
+            <div className="flex items-center gap-2">
+              <button onClick={() => setP({ ...p, planned_count: Math.max(0, p.planned_count - 1) })}
+                className={`w-8 h-9 rounded-lg border ${theme.border} ${theme.hover} font-bold text-lg flex items-center justify-center`}>−</button>
+              <span className="text-lg font-bold tabular-nums w-8 text-center">{p.planned_count}</span>
+              <button onClick={() => setP({ ...p, planned_count: p.planned_count + 1 })}
+                className={`w-8 h-9 rounded-lg border ${theme.border} ${theme.hover} font-bold text-lg flex items-center justify-center`}>+</button>
+            </div>
+          </Field>
+          <Field label="Açılış tarixi" theme={theme}>
+            <input type="date" value={p.opened_at}
+              onChange={e => setP({ ...p, opened_at: e.target.value })}
+              className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`} />
+          </Field>
         </div>
-        <div>
-          <div className="font-semibold text-sm">{title}</div>
-          <div className={`text-xs mt-1 ${theme.textDim}`}>Bu əməliyyat geri qaytarıla bilməz.</div>
-        </div>
+
+        {/* Qeyd */}
+        <Field label="Qeyd (istəyə bağlı)" theme={theme}>
+          <textarea value={p.notes} onChange={e => setP({ ...p, notes: e.target.value })}
+            rows={2} className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm resize-none`} />
+        </Field>
       </div>
-      <div className="flex gap-2 mt-5">
-        <button onClick={onConfirm} className="flex-1 px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-sm font-bold">Sil</button>
-        <button onClick={onClose} className={`px-4 py-2 rounded-lg border ${theme.border} ${theme.hover} text-sm`}>Ləğv et</button>
-      </div>
+      <Buttons onSave={() => onSave(p)} onCancel={onClose} disabled={!valid} L={L} theme={theme} />
     </Modal>
   );
 }
