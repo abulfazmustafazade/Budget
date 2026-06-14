@@ -14,10 +14,11 @@ export default function Shell({ view, setView, children }) {
   const canSeeUsers = profile?.is_admin;
 
   const navItems = [
-    { id: 'dashboard', icon: LayoutDashboard, label: L.nav.dashboard },
-    { id: 'companies', icon: Briefcase, label: L.nav.companies },
-    { id: 'organization', icon: Network, label: L.nav.organization },
-    { id: 'employees', icon: Users, label: L.nav.employees },
+    { id: 'dashboard',    icon: LayoutDashboard, label: L.nav.dashboard },
+    { id: 'companies',    icon: Briefcase,        label: L.nav.companies },
+    { id: 'organization', icon: Network,          label: L.nav.organization },
+    { id: 'positions',    icon: Users,            label: 'Vəzifələr' },
+    { id: 'employees',    icon: Building2,        label: L.nav.employees },
     ...(canSeeUsers ? [{ id: 'users', icon: ShieldCheck, label: L.nav.users }] : []),
   ];
 
