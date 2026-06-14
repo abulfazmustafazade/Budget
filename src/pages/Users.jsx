@@ -40,13 +40,14 @@ export default function Users() {
   useEffect(() => { refresh(); }, []);
 
   // ── Yeni user yarat ──────────────────────────────────────────────
-  const createUser = async ({ email, password, display_name, is_admin }) => {
+  const createUser = async ({ email, password, display_name, is_admin, username }) => {
     setError(null);
     const { data, error } = await supabase.rpc('create_app_user', {
       p_email: email,
       p_password: password,
       p_display_name: display_name,
       p_is_admin: is_admin,
+      p_username: username,
     });
     if (error) { setError(error.message); return false; }
     setAdding(false);
@@ -154,7 +155,9 @@ export default function Users() {
                         </span>
                       )}
                     </div>
-                    <div className={`text-xs ${theme.textDim} mt-0.5`}>···{u.id.slice(-8)}</div>
+                    <div className={`text-xs ${theme.textDim} mt-0.5`}>
+                      {u.username ? `@${u.username}` : `···${u.id.slice(-8)}`}
+                    </div>
                   </div>
                   <div className="flex gap-1 shrink-0">
                     <button
@@ -285,6 +288,7 @@ export default function Users() {
 function AddUserModal({ L, theme, onSave, onClose }) {
   const [form, setForm] = useState({
     display_name: '',
+    username: '',
     email: '',
     password: '',
     is_admin: false,
@@ -293,7 +297,7 @@ function AddUserModal({ L, theme, onSave, onClose }) {
   const [loading, setLoading] = useState(false);
   const [localError, setLocalError] = useState(null);
 
-  const valid = form.display_name && form.email && form.password.length >= 6;
+  const valid = form.display_name && form.username && form.email && form.password.length >= 6;
 
   const submit = async () => {
     setLocalError(null);
@@ -314,6 +318,18 @@ function AddUserModal({ L, theme, onSave, onClose }) {
             className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`}
             autoFocus
           />
+        </Field>
+
+        <Field label="İstifadəçi adı" theme={theme}>
+          <input
+            value={form.username}
+            onChange={(e) => setForm({ ...form, username: e.target.value.toLowerCase().replace(/\s/g, '') })}
+            placeholder="Məs: ayten"
+            className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`}
+            autoCapitalize="none"
+            autoCorrect="off"
+          />
+          <div className={`text-[11px] mt-1 ${theme.textFaint}`}>Daxil olmaq üçün bu ad istifadə olunur</div>
         </Field>
 
         <Field label={L.perm.email} theme={theme}>
