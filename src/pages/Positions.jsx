@@ -73,15 +73,16 @@ export default function Positions() {
     refresh();
   };
 
-  // Headcount plan yarat/yenilə
   const saveHeadcount = async (h) => {
     const payload = {
-      position_type_id: h.position_type_id,
-      org_unit_id:      h.org_unit_id,
-      company_id:       h.company_id,
-      planned_count:    Number(h.planned_count),
-      opened_at:        h.opened_at,
-      notes:            h.notes || null,
+      org_unit_id:   h.org_unit_id,
+      company_id:    h.company_id,
+      planned_count: Number(h.planned_count),
+      opened_at:     h.opened_at,
+      notes:         h.notes || null,
+      position_name: h.position_name?.trim() || null,
+      manager_name:  h.manager_name?.trim() || null,
+      position_type_id: null,
     };
     if (h._new) {
       const { error } = await supabase.from('position_headcounts').insert(payload);
@@ -116,7 +117,7 @@ export default function Positions() {
         action={canManage && (
           <div className="flex gap-2">
             <button
-              onClick={() => setEditHeadcount({ _new: true, position_type_id: '', org_unit_id: '', company_id: companies[0]?.id || '', planned_count: 1, opened_at: new Date().toISOString().slice(0,10), notes: '' })}
+              onClick={() => setEditHeadcount({ _new: true, position_type_id: '', position_name: '', manager_name: '', org_unit_id: '', company_id: companies[0]?.id || '', planned_count: 1, opened_at: new Date().toISOString().slice(0,10), notes: '' })}
               className="px-3.5 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold flex items-center gap-1.5"
             >
               <Plus className="w-4 h-4" /> Vəzifə planı
@@ -239,10 +240,9 @@ export default function Positions() {
                           const { data } = await supabase
                             .from('position_headcounts')
                             .select('*')
-                            .eq('position_type_id', v.position_type_id)
-                            .eq('org_unit_id', v.org_unit_id)
+                            .eq('id', v.headcount_id)
                             .single();
-                          if (data) setEditHeadcount(data);
+                          if (data) setEditHeadcount({ ...data, position_name: data.position_name || v.position_name_az });
                         }}
                         className={`p-1.5 rounded-md ${theme.hover} shrink-0`}
                       >
@@ -453,7 +453,7 @@ function HeadcountModal({ theme, lang, headcount, positionTypes, companies, orgU
     sub_department: 'Alt-departament', unit: 'Şöbə', sub_unit: 'Alt-şöbə',
   };
 
-  const valid = h.company_id && h.org_unit_id && h.position_type_id && h.planned_count > 0;
+  const valid = h.company_id && h.org_unit_id && h.position_name?.trim() && h.planned_count > 0;
 
   // Addım başlıqları
   const steps = ['Şirkət', 'Struktur', 'Vəzifə'];
@@ -558,31 +558,27 @@ function HeadcountModal({ theme, lang, headcount, positionTypes, companies, orgU
             </div>
           )}
 
-          {/* Vəzifə tipi */}
+          {/* Vəzifə adı — sərbəst yazılır */}
           <div>
-            <div className={`text-[11px] font-bold uppercase tracking-wider mb-2 ${theme.textDim}`}>Vəzifə</div>
-            <div className="space-y-1.5 max-h-48 overflow-y-auto">
-              {positionTypes.map(pt => {
-                const mgr = positionTypes.find(p => p.id === pt.manager_position_type_id);
-                return (
-                  <button key={pt.id}
-                    onClick={() => setH({ ...h, position_type_id: pt.id })}
-                    className={`w-full text-left px-3 py-2.5 rounded-lg border transition-all flex items-center justify-between ${
-                      h.position_type_id === pt.id
-                        ? 'border-blue-500 bg-blue-500/5'
-                        : `${theme.border} ${theme.hover}`
-                    }`}>
-                    <div>
-                      <div className="text-sm font-semibold">{pt.name_az}</div>
-                      {mgr && <div className={`text-[11px] ${theme.textFaint} mt-0.5`}>Rəhbər: {mgr.name_az}</div>}
-                    </div>
-                    {h.position_type_id === pt.id && (
-                      <div className="w-4 h-4 rounded-full bg-blue-500 flex items-center justify-center text-white text-[10px] shrink-0">✓</div>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
+            <div className={`text-[11px] font-bold uppercase tracking-wider mb-2 ${theme.textDim}`}>Vəzifə adı</div>
+            <input
+              value={h.position_name || ''}
+              onChange={e => setH({ ...h, position_name: e.target.value })}
+              placeholder="Məs: Data Analitik, Baş Mütəxəssis..."
+              className={`w-full px-3 py-2.5 rounded-lg border ${theme.input} text-sm`}
+              autoFocus
+            />
+          </div>
+
+          {/* Rəhbər vəzifəsi — sərbəst yazılır */}
+          <div>
+            <div className={`text-[11px] font-bold uppercase tracking-wider mb-2 ${theme.textDim}`}>Birbaşa rəhbər vəzifəsi <span className={theme.textFaint}>(istəyə bağlı)</span></div>
+            <input
+              value={h.manager_name || ''}
+              onChange={e => setH({ ...h, manager_name: e.target.value })}
+              placeholder="Məs: Şöbə Müdiri, Departament Direktoru..."
+              className={`w-full px-3 py-2.5 rounded-lg border ${theme.input} text-sm`}
+            />
           </div>
 
           {/* Plan say + tarix */}
