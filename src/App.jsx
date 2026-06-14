@@ -7,6 +7,7 @@ import Dashboard from './pages/Dashboard';
 import Companies from './pages/Companies';
 import Organization from './pages/Organization';
 import Employees from './pages/Employees';
+import Positions from './pages/Positions';
 import Users from './pages/Users';
 
 export default function App() {
@@ -44,6 +45,7 @@ export default function App() {
       {view === 'companies' && <Companies />}
       {view === 'organization' && <Organization />}
       {view === 'employees' && <Employees />}
+      {view === 'positions'    && <Positions />}
       {view === 'users' && profile.is_admin && <Users />}
     </Shell>
   );
