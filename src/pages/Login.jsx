@@ -15,7 +15,6 @@ export default function Login() {
   const submit = async () => {
     setError(null);
     setLoading(true);
-
     try {
       const input = username.trim();
 
