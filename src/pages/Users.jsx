@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Pencil, Trash2, ShieldCheck, AlertTriangle, Plus, KeyRound, Eye, EyeOff } from 'lucide-react';
 import { useApp } from '../contexts/AppContext';
 import { useCompanies, useOrgUnits } from '../hooks/useData';
-import { supabase } from '../lib/supabase';
+import { supabase, createTempClient } from '../lib/supabase';
 import { PageHeader, useTheme, Modal, Field, Buttons } from '../components/primitives';
 import { PERMISSION_KEYS, VISIBILITY_KEYS, ADMIN_ONLY_KEYS } from '../lib/permissions';
 
@@ -39,17 +39,69 @@ export default function Users() {
 
   useEffect(() => { refresh(); }, []);
 
-  // ── Yeni user yarat ──────────────────────────────────────────────
+  // ── Yeni user yarat (Supabase Auth signUp API ilə) ────────────────
   const createUser = async ({ email, password, display_name, is_admin, username }) => {
     setError(null);
-    const { data, error } = await supabase.rpc('create_app_user', {
-      p_email: email,
-      p_password: password,
-      p_display_name: display_name,
-      p_is_admin: is_admin,
-      p_username: username,
+
+    // 1. Ayrı client ilə signUp çağır — admin sessiyası pozulmur
+    const tempClient = createTempClient();
+    const { data: signUpData, error: signUpError } = await tempClient.auth.signUp({
+      email,
+      password,
+      options: {
+        data: { display_name },
+      },
     });
-    if (error) { setError(error.message); return false; }
+
+    if (signUpError) {
+      setError(signUpError.message);
+      return false;
+    }
+
+    const newUserId = signUpData.user?.id;
+    if (!newUserId) {
+      setError('User yaradıldı amma ID qaytarılmadı');
+      return false;
+    }
+
+    // 2. user_profiles-ə yaz (admin client ilə)
+    const v_username = (username || display_name).toLowerCase().replace(/[^a-z0-9]/g, '') || 'user' + Date.now();
+
+    const { error: profileError } = await supabase
+      .from('user_profiles')
+      .insert({
+        id: newUserId,
+        display_name,
+        is_admin,
+        username: v_username,
+        email: email.toLowerCase(),
+      });
+
+    if (profileError) {
+      console.error('Profile insert error:', profileError);
+      setError('User yaradıldı amma profil yazılmadı: ' + profileError.message);
+      return false;
+    }
+
+    // 3. user_permissions-ə boş icazələr yaz
+    const { error: permError } = await supabase
+      .from('user_permissions')
+      .insert({
+        user_id: newUserId,
+        all_companies: false, all_org_units: false,
+        see_salaries: false, see_termination_payouts: false,
+        see_budgets: false, see_savings: false,
+        can_edit_employees: false, can_edit_salaries: false,
+        can_edit_positions: false, can_transfer_employees: false,
+        can_terminate_employees: false, can_override_payouts: false,
+        can_edit_budgets: false, can_manage_structure: false,
+        can_manage_users: false,
+      });
+
+    if (permError) {
+      console.error('Permissions insert error:', permError);
+    }
+
     setAdding(false);
     refresh();
     return true;
