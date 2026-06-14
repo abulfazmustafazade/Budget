@@ -7,7 +7,7 @@ import { useTheme } from '../components/primitives';
 export default function Login() {
   const { L, lang, setLang, dark, setDark } = useApp();
   const theme = useTheme(dark);
-  const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -15,9 +15,30 @@ export default function Login() {
   const submit = async () => {
     setError(null);
     setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+
+    try {
+      // Username-dən email tap
+      const { data: emailData, error: fnError } = await supabase
+        .rpc('get_email_by_username', { p_username: username.trim() });
+
+      if (fnError || !emailData) {
+        setError(L.login.wrong);
+        setLoading(false);
+        return;
+      }
+
+      // Email ilə daxil ol
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email: emailData,
+        password,
+      });
+
+      if (signInError) setError(L.login.wrong);
+    } catch {
+      setError(L.login.wrong);
+    }
+
     setLoading(false);
-    if (error) setError(L.login.wrong);
   };
 
   return (
@@ -51,17 +72,19 @@ export default function Login() {
             <div className="space-y-3">
               <div>
                 <label className={`block text-[11px] font-semibold mb-1.5 ${theme.textDim} uppercase tracking-wider`}>
-                  {L.login.email}
+                  {L.login.username}
                 </label>
                 <div className="relative">
                   <UserIcon className={`absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 ${theme.textFaint}`} />
                   <input
-                    type="email"
-                    value={email}
-                    onChange={(e) => { setEmail(e.target.value); setError(null); }}
+                    type="text"
+                    value={username}
+                    onChange={(e) => { setUsername(e.target.value); setError(null); }}
                     onKeyDown={(e) => e.key === 'Enter' && submit()}
                     className={`w-full pl-9 pr-3 py-2.5 rounded-lg border ${theme.input} text-sm`}
                     autoFocus
+                    autoComplete="username"
+                    autoCapitalize="none"
                   />
                 </div>
               </div>
@@ -77,13 +100,14 @@ export default function Login() {
                     onChange={(e) => { setPassword(e.target.value); setError(null); }}
                     onKeyDown={(e) => e.key === 'Enter' && submit()}
                     className={`w-full pl-9 pr-3 py-2.5 rounded-lg border ${theme.input} text-sm`}
+                    autoComplete="current-password"
                   />
                 </div>
               </div>
               {error && <div className="text-xs text-rose-500">{error}</div>}
               <button
                 onClick={submit}
-                disabled={loading || !email || !password}
+                disabled={loading || !username || !password}
                 className="w-full py-2.5 rounded-lg bg-gradient-to-r from-blue-600 to-emerald-500 hover:from-blue-700 hover:to-emerald-600 disabled:opacity-50 text-white text-sm font-bold"
               >
                 {loading ? '...' : L.login.signIn}
