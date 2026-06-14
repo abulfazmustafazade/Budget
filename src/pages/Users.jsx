@@ -11,7 +11,6 @@ export default function Users() {
   const theme = useTheme(dark);
   const { data: companies } = useCompanies();
   const { data: orgUnits } = useOrgUnits();
-
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null);      // mövcud useri redaktə
