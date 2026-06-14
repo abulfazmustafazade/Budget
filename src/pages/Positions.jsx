@@ -402,14 +402,95 @@ function OrgChart({ positions, parentId, theme, canManage, onEdit, onAddChild })
   );
 }
 
-// ─── Vəzifə modal ────────────────────────────────────────────────────────────
+// ─── Ümumi wizard wrapper ─────────────────────────────────────────────────────
+function WizardSteps({ steps, current, theme }) {
+  return (
+    <div className="flex items-center gap-2 mb-6">
+      {steps.map((s, i) => {
+        const n = i + 1;
+        const done = current > n, active = current === n;
+        return (
+          <React.Fragment key={n}>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
+                done ? 'bg-emerald-500 text-white' :
+                active ? 'bg-blue-600 text-white' :
+                `${theme.surface2} border ${theme.border} ${theme.textFaint}`
+              }`}>{done ? '✓' : n}</div>
+              <span className={`text-xs font-semibold ${active ? theme.text : theme.textFaint}`}>{s}</span>
+            </div>
+            {i < steps.length - 1 && (
+              <div className={`flex-1 h-px ${done ? 'bg-emerald-500' : theme.border.replace('border-','bg-')}`} style={{height:'1px', background: done ? '#10b981' : undefined}} />
+            )}
+          </React.Fragment>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Org unit ağacı (wizard addım 2 üçün) ────────────────────────────────────
+function OrgTreePicker({ orgUnits, companyId, selected, onSelect, theme }) {
+  const [open, setOpen] = useState(new Set());
+  const L_COLORS = {
+    division:'bg-blue-500/10 text-blue-600 dark:text-blue-400',
+    department:'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+    sub_department:'bg-purple-500/10 text-purple-500',
+    unit:'bg-amber-500/10 text-amber-600',
+    sub_unit:'bg-slate-500/10 text-slate-500',
+  };
+  const L_NAMES = {division:'Bölmə',department:'Departament',sub_department:'Alt-dept',unit:'Şöbə',sub_unit:'Alt-şöbə'};
+
+  const units = orgUnits.filter(u => u.company_id === companyId);
+  const toggle = id => { const s = new Set(open); s.has(id)?s.delete(id):s.add(id); setOpen(s); };
+
+  const Row = ({ u, depth }) => {
+    const children = units.filter(x => x.parent_id === u.id);
+    const isOpen = open.has(u.id) || depth < 1;
+    return (
+      <>
+        <button
+          onClick={() => onSelect(u.id)}
+          className={`w-full text-left flex items-center gap-2 py-2.5 border-b ${theme.border} last:border-0 transition-colors ${
+            selected === u.id ? 'bg-blue-500/10' : `hover:bg-blue-500/5`
+          }`}
+          style={{ paddingLeft: `${12 + depth * 20}px`, paddingRight: '12px' }}
+        >
+          {children.length > 0 ? (
+            <span onClick={e => { e.stopPropagation(); toggle(u.id); }}
+              className={`w-4 text-center text-xs ${theme.textFaint}`}>
+              {isOpen ? '▾' : '▸'}
+            </span>
+          ) : <span className="w-4" />}
+          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${L_COLORS[u.level]}`}>{L_NAMES[u.level]}</span>
+          <span className={`text-sm flex-1 ${selected === u.id ? 'font-bold' : ''}`}>{u.name_az}</span>
+          {selected === u.id && <span className="text-blue-500 text-xs font-bold">✓</span>}
+        </button>
+        {isOpen && children.map(c => <Row key={c.id} u={c} depth={depth + 1} />)}
+      </>
+    );
+  };
+
+  const roots = units.filter(u => !u.parent_id);
+  return (
+    <div className={`rounded-xl border ${theme.border} overflow-hidden max-h-72 overflow-y-auto`}>
+      {roots.length === 0
+        ? <div className={`p-6 text-center text-sm ${theme.textDim}`}>Struktur yoxdur. Əvvəlcə "Struktur" bölməsindən bölmə yaradın.</div>
+        : roots.map(u => <Row key={u.id} u={u} depth={0} />)
+      }
+    </div>
+  );
+}
+
+// ─── Vəzifə wizard ───────────────────────────────────────────────────────────
 function PositionModal({ theme, position, companies, orgUnits, parentOptions, onSave, onClose }) {
   const isEdit = !!position._edit;
+  const [step, setStep] = useState(isEdit ? 3 : 1);
   const [p, setP] = useState({
     id:            position.position_id,
     company_id:    position.company_id    || companies[0]?.id || '',
-    org_unit_id:   position.org_unit_id   || '',
-    parent_id:     position.parent_id     || '',
+    org_unit_id:   position.org_unit_id   || null,
+    parent_id:     position.parent_id     || null,
     name:          position.position_name || position.name || '',
     planned_count: position.planned_count || 1,
     opened_at:     position.opened_at     || new Date().toISOString().slice(0, 10),
@@ -417,101 +498,147 @@ function PositionModal({ theme, position, companies, orgUnits, parentOptions, on
     _new:          !isEdit,
   });
 
-  const filteredOus      = orgUnits.filter(u => u.company_id === p.company_id);
-  const parentCandidates = parentOptions.filter(x =>
-    x.company_id === p.company_id && x.position_id !== p.id
-  );
-  const selectedParent   = parentOptions.find(x => x.position_id === p.parent_id);
-  const valid            = p.name.trim() && p.company_id && p.planned_count > 0;
+  const selectedOu     = orgUnits.find(u => u.id === p.org_unit_id);
+  const selectedParent = parentOptions.find(x => x.position_id === p.parent_id);
+  const parentCandidates = parentOptions.filter(x => x.company_id === p.company_id && x.position_id !== p.id);
+  const selectedCompany  = companies.find(c => c.id === p.company_id);
+  const valid = p.name.trim() && p.company_id && p.planned_count > 0;
 
-  const L = { actions: { save: 'Yadda saxla', cancel: 'Ləğv et' } };
+  // Org unit yolu
+  const getPath = id => {
+    const path = []; let cur = orgUnits.find(u => u.id === id);
+    while (cur) { path.unshift(cur.name_az); cur = orgUnits.find(u => u.id === cur.parent_id); }
+    return path.join(' › ');
+  };
 
   return (
-    <Modal onClose={onClose} theme={theme} title={isEdit ? `"${p.name}" — redaktə` : 'Yeni vəzifə yarat'}>
-      <div className="space-y-3">
+    <Modal onClose={onClose} theme={theme} title={isEdit ? `"${p.name}" — redaktə` : 'Vəzifə yarat'} wide>
+      {!isEdit && <WizardSteps steps={['Şirkət', 'Struktur', 'Vəzifə']} current={step} theme={theme} />}
 
-        {/* Şirkət — yalnız yeni yaradanda */}
-        {!isEdit && (
-          <Field label="Şirkət" theme={theme}>
-            <select value={p.company_id}
-              onChange={e => setP({ ...p, company_id: e.target.value, org_unit_id: '', parent_id: '' })}
-              className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`}>
-              {companies.map(c => <option key={c.id} value={c.id}>{c.name_az}</option>)}
-            </select>
-          </Field>
-        )}
+      {/* Addım 1 — Şirkət */}
+      {step === 1 && (
+        <div className="space-y-2">
+          <div className={`text-sm font-semibold mb-3 ${theme.textDim}`}>Hansı şirkət üçün vəzifə yaradırsınız?</div>
+          {companies.map(c => (
+            <button key={c.id} onClick={() => { setP({ ...p, company_id: c.id, org_unit_id: null, parent_id: null }); setStep(2); }}
+              className={`w-full text-left px-4 py-3 rounded-xl border-2 flex items-center justify-between transition-all ${
+                p.company_id === c.id ? 'border-blue-500 bg-blue-500/5' : `${theme.border} hover:border-blue-300`
+              }`}>
+              <div>
+                <div className="font-bold">{c.name_az}</div>
+                <div className={`text-xs ${theme.textDim}`}>{c.name_en}</div>
+              </div>
+              {p.company_id === c.id && <div className="w-5 h-5 rounded-full bg-blue-500 text-white text-xs flex items-center justify-center">✓</div>}
+            </button>
+          ))}
+        </div>
+      )}
 
-        {/* Vəzifə adı */}
-        <Field label="Vəzifə adı" theme={theme}>
-          <input
-            value={p.name}
-            onChange={e => setP({ ...p, name: e.target.value })}
-            placeholder="Məs: Data Analitik, Direktor, Mühasib..."
-            className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`}
-            autoFocus
-          />
-        </Field>
-
-        {/* Kimə bağlıdır (rəhbər vəzifəsi) */}
-        <Field label="Kimə bağlıdır (rəhbər)" theme={theme}>
-          <select
-            value={p.parent_id || ''}
-            onChange={e => setP({ ...p, parent_id: e.target.value || null })}
-            className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`}
-          >
-            <option value="">— kök vəzifədir (heç kimə bağlı deyil) —</option>
-            {parentCandidates.map(x => (
-              <option key={x.position_id} value={x.position_id}>
-                {Array(x.depth).fill('·').join(' ')} {x.position_name}
-              </option>
-            ))}
-          </select>
-          {selectedParent && (
-            <div className={`text-[11px] mt-1 ${theme.textFaint}`}>
-              Birbaşa rəhbər: <span className="text-blue-500 font-semibold">{selectedParent.position_name}</span>
+      {/* Addım 2 — Struktur */}
+      {step === 2 && (
+        <div className="space-y-3">
+          <div className={`text-sm font-semibold ${theme.textDim}`}>Vəzifə hansı bölməyə aiddir? <span className={`${theme.textFaint} font-normal`}>(istəyə bağlı)</span></div>
+          <OrgTreePicker orgUnits={orgUnits} companyId={p.company_id}
+            selected={p.org_unit_id} onSelect={id => setP({ ...p, org_unit_id: id })} theme={theme} />
+          {p.org_unit_id && (
+            <div className={`p-2.5 rounded-lg ${theme.surface2} border ${theme.border} text-xs flex items-center gap-2`}>
+              <span className="text-emerald-500">✓</span>
+              <span className="font-semibold">{getPath(p.org_unit_id)}</span>
+              <button onClick={() => setP({ ...p, org_unit_id: null })} className={`ml-auto text-xs ${theme.textFaint} hover:text-rose-500`}>Sil</button>
             </div>
           )}
-        </Field>
-
-        {/* Bölmə */}
-        <Field label="Bölmə (istəyə bağlı)" theme={theme}>
-          <select
-            value={p.org_unit_id || ''}
-            onChange={e => setP({ ...p, org_unit_id: e.target.value || null })}
-            className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`}
-          >
-            <option value="">— bölməyə bağlamadan —</option>
-            {filteredOus.map(u => (
-              <option key={u.id} value={u.id}>{u.name_az}</option>
-            ))}
-          </select>
-        </Field>
-
-        {/* Plan say + tarix */}
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Plan say" theme={theme}>
-            <div className="flex items-center gap-2">
-              <button onClick={() => setP({ ...p, planned_count: Math.max(0, p.planned_count - 1) })}
-                className={`w-8 h-9 rounded-lg border ${theme.border} ${theme.hover} font-bold text-lg flex items-center justify-center`}>−</button>
-              <span className="text-lg font-bold tabular-nums w-8 text-center">{p.planned_count}</span>
-              <button onClick={() => setP({ ...p, planned_count: p.planned_count + 1 })}
-                className={`w-8 h-9 rounded-lg border ${theme.border} ${theme.hover} font-bold text-lg flex items-center justify-center`}>+</button>
-            </div>
-          </Field>
-          <Field label="Açılış tarixi" theme={theme}>
-            <input type="date" value={p.opened_at}
-              onChange={e => setP({ ...p, opened_at: e.target.value })}
-              className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`} />
-          </Field>
+          <div className={`text-xs ${theme.textFaint}`}>Bölmə seçmədən də davam edə bilərsiniz</div>
         </div>
+      )}
 
-        {/* Qeyd */}
-        <Field label="Qeyd (istəyə bağlı)" theme={theme}>
-          <textarea value={p.notes} onChange={e => setP({ ...p, notes: e.target.value })}
-            rows={2} className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm resize-none`} />
-        </Field>
+      {/* Addım 3 — Vəzifə detalları */}
+      {step === 3 && (
+        <div className="space-y-4">
+          {/* Xülasə */}
+          {!isEdit && (
+            <div className={`p-3 rounded-xl ${theme.surface2} border ${theme.border} space-y-1 text-xs`}>
+              <div className="flex gap-2"><span className={theme.textFaint}>Şirkət:</span><span className="font-bold">{selectedCompany?.name_az}</span></div>
+              {p.org_unit_id && <div className="flex gap-2"><span className={theme.textFaint}>Bölmə:</span><span className="font-semibold">{getPath(p.org_unit_id)}</span></div>}
+            </div>
+          )}
+
+          {/* Vəzifə adı */}
+          <div>
+            <div className={`text-[11px] font-bold uppercase tracking-wider mb-1.5 ${theme.textDim}`}>Vəzifə adı</div>
+            <input value={p.name} onChange={e => setP({ ...p, name: e.target.value })}
+              placeholder="Məs: Data Analitik, Direktor, Mühasib..."
+              className={`w-full px-3 py-2.5 rounded-lg border ${theme.input} text-sm`} autoFocus />
+          </div>
+
+          {/* Kimə bağlıdır */}
+          <div>
+            <div className={`text-[11px] font-bold uppercase tracking-wider mb-1.5 ${theme.textDim}`}>
+              Kimə bağlıdır <span className={`normal-case font-normal ${theme.textFaint}`}>(rəhbər vəzifəsi)</span>
+            </div>
+            <div className="space-y-1.5 max-h-44 overflow-y-auto">
+              <button onClick={() => setP({ ...p, parent_id: null })}
+                className={`w-full text-left px-3 py-2 rounded-lg border text-sm transition-all ${
+                  !p.parent_id ? 'border-blue-500 bg-blue-500/5 font-semibold' : `${theme.border} hover:bg-blue-500/5`
+                }`}>
+                — Kök vəzifədir (heç kimə bağlı deyil)
+              </button>
+              {parentCandidates.map(x => (
+                <button key={x.position_id} onClick={() => setP({ ...p, parent_id: x.position_id })}
+                  className={`w-full text-left px-3 py-2 rounded-lg border text-sm transition-all flex items-center gap-2 ${
+                    p.parent_id === x.position_id ? 'border-blue-500 bg-blue-500/5 font-semibold' : `${theme.border} hover:bg-blue-500/5`
+                  }`}>
+                  <span style={{ paddingLeft: `${x.depth * 12}px` }} className="flex items-center gap-2">
+                    {x.depth > 0 && <span className={theme.textFaint}>└</span>}
+                    {x.position_name}
+                  </span>
+                  {p.parent_id === x.position_id && <span className="ml-auto text-blue-500 text-xs">✓</span>}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Plan say + tarix */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <div className={`text-[11px] font-bold uppercase tracking-wider mb-1.5 ${theme.textDim}`}>Plan say</div>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setP({ ...p, planned_count: Math.max(0, p.planned_count - 1) })}
+                  className={`w-8 h-9 rounded-lg border ${theme.border} ${theme.hover} font-bold text-lg flex items-center justify-center`}>−</button>
+                <span className="text-xl font-bold tabular-nums w-8 text-center">{p.planned_count}</span>
+                <button onClick={() => setP({ ...p, planned_count: p.planned_count + 1 })}
+                  className={`w-8 h-9 rounded-lg border ${theme.border} ${theme.hover} font-bold text-lg flex items-center justify-center`}>+</button>
+              </div>
+            </div>
+            <div>
+              <div className={`text-[11px] font-bold uppercase tracking-wider mb-1.5 ${theme.textDim}`}>Açılış tarixi</div>
+              <input type="date" value={p.opened_at} onChange={e => setP({ ...p, opened_at: e.target.value })}
+                className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`} />
+            </div>
+          </div>
+
+          {/* Qeyd */}
+          <div>
+            <div className={`text-[11px] font-bold uppercase tracking-wider mb-1.5 ${theme.textDim}`}>Qeyd <span className={`normal-case font-normal ${theme.textFaint}`}>(istəyə bağlı)</span></div>
+            <textarea value={p.notes} onChange={e => setP({ ...p, notes: e.target.value })}
+              rows={2} className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm resize-none`} />
+          </div>
+        </div>
+      )}
+
+      {/* Naviqasiya */}
+      <div className="flex gap-2 mt-5">
+        {!isEdit && step > 1 && (
+          <button onClick={() => setStep(step - 1)} className={`px-4 py-2 rounded-lg border ${theme.border} ${theme.hover} text-sm font-medium`}>← Geri</button>
+        )}
+        {(isEdit || step === 1) && (
+          <button onClick={onClose} className={`px-4 py-2 rounded-lg border ${theme.border} ${theme.hover} text-sm font-medium`}>Ləğv et</button>
+        )}
+        <div className="flex-1" />
+        {!isEdit && step < 3
+          ? <button onClick={() => setStep(step + 1)} className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold">İrəli →</button>
+          : <button onClick={() => onSave(p)} disabled={!valid} className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white text-sm font-bold">Yadda saxla</button>
+        }
       </div>
-      <Buttons onSave={() => onSave(p)} onCancel={onClose} disabled={!valid} L={L} theme={theme} />
     </Modal>
   );
 }
