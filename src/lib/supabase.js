@@ -16,3 +16,13 @@ export const supabase = createClient(url, key, {
     detectSessionInUrl: false,
   },
 });
+
+// İstifadəçi yaratmaq üçün ayrı client — admin sessiyasını pozmur
+export const createTempClient = () =>
+  createClient(url, key, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  });
