@@ -276,25 +276,34 @@ export default function Positions() {
           )}
           <div className={`${theme.surface} border ${theme.border} rounded-xl overflow-hidden`}>
             <div className="divide-y divide-slate-200 dark:divide-slate-800">
-              {positionTypes.map(pt => (
-                <div key={pt.id} className={`px-4 py-3 flex items-center justify-between gap-3 ${theme.hover}`}>
-                  <div>
-                    <div className="font-semibold text-sm">{pt.name_az}</div>
-                    {pt.name_en && <div className={`text-xs ${theme.textDim}`}>{pt.name_en}</div>}
-                    {pt.description && <div className={`text-xs ${theme.textFaint} mt-0.5`}>{pt.description}</div>}
-                  </div>
-                  {canManage && (
-                    <div className="flex gap-1 shrink-0">
-                      <button onClick={() => setEditType({ ...pt })} className={`p-1.5 rounded-md ${theme.hover}`}>
-                        <Edit2 className="w-4 h-4" />
-                      </button>
-                      <button onClick={() => setDelType(pt)} className={`p-1.5 rounded-md ${theme.hover} text-rose-500`}>
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+              {positionTypes.map(pt => {
+                const managerPt = positionTypes.find(p => p.id === pt.manager_position_type_id);
+                return (
+                  <div key={pt.id} className={`px-4 py-3 flex items-center justify-between gap-3 ${theme.hover}`}>
+                    <div>
+                      <div className="font-semibold text-sm">{pt.name_az}</div>
+                      {pt.name_en && <div className={`text-xs ${theme.textDim}`}>{pt.name_en}</div>}
+                      {managerPt && (
+                        <div className={`text-xs mt-0.5 flex items-center gap-1`}>
+                          <span className={theme.textFaint}>Rəhbər:</span>
+                          <span className="text-blue-500 font-medium">{managerPt.name_az}</span>
+                        </div>
+                      )}
+                      {pt.description && <div className={`text-xs ${theme.textFaint} mt-0.5`}>{pt.description}</div>}
                     </div>
-                  )}
-                </div>
-              ))}
+                    {canManage && (
+                      <div className="flex gap-1 shrink-0">
+                        <button onClick={() => setEditType({ ...pt })} className={`p-1.5 rounded-md ${theme.hover}`}>
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button onClick={() => setDelType(pt)} className={`p-1.5 rounded-md ${theme.hover} text-rose-500`}>
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
               {positionTypes.length === 0 && (
                 <div className={`p-8 text-center text-sm ${theme.textDim}`}>Hələ vəzifə tipi yoxdur</div>
               )}
@@ -305,7 +314,7 @@ export default function Positions() {
 
       {/* Modallar */}
       {editType && (
-        <PositionTypeModal theme={theme} type={editType} onSave={saveType} onClose={() => setEditType(null)} />
+        <PositionTypeModal theme={theme} type={editType} positionTypes={positionTypes} onSave={saveType} onClose={() => setEditType(null)} />
       )}
       {editHeadcount && (
         <HeadcountModal
@@ -345,10 +354,14 @@ function StatCard({ theme, label, value, icon, color, suffix = '' }) {
 }
 
 // ─── Vəzifə tipi modal ───────────────────────────────────────────────────────
-function PositionTypeModal({ theme, type, onSave, onClose }) {
+function PositionTypeModal({ theme, type, positionTypes, onSave, onClose }) {
   const [t, setT] = useState(type);
   const valid = t.name_az && t.name_en;
   const L = { actions: { save: 'Yadda saxla', cancel: 'Ləğv et' } };
+
+  // Özünü rəhbər kimi seçməsin
+  const managerOptions = positionTypes.filter(p => p.id !== t.id);
+
   return (
     <Modal onClose={onClose} theme={theme} title={t._new ? 'Yeni vəzifə tipi' : 'Vəzifə tipini redaktə et'}>
       <div className="space-y-3">
@@ -359,6 +372,21 @@ function PositionTypeModal({ theme, type, onSave, onClose }) {
         <Field label="Ad (İngilis)" theme={theme}>
           <input value={t.name_en} onChange={e => setT({ ...t, name_en: e.target.value })}
             className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`} />
+        </Field>
+        <Field label="Birbaşa rəhbər vəzifəsi" theme={theme}>
+          <select
+            value={t.manager_position_type_id || ''}
+            onChange={e => setT({ ...t, manager_position_type_id: e.target.value || null })}
+            className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`}
+          >
+            <option value="">— rəhbər yoxdur —</option>
+            {managerOptions.map(p => (
+              <option key={p.id} value={p.id}>{p.name_az}</option>
+            ))}
+          </select>
+          <div className={`text-[11px] mt-1 ${theme.textFaint}`}>
+            Məs: "Data Analitik" → rəhbəri "Şöbə Müdiri"
+          </div>
         </Field>
         <Field label="Qeyd (istəyə bağlı)" theme={theme}>
           <textarea value={t.description || ''} onChange={e => setT({ ...t, description: e.target.value })}
