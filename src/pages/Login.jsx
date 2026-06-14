@@ -17,25 +17,43 @@ export default function Login() {
     setLoading(true);
 
     try {
-      // Username-dən email tap
-      const { data: emailData, error: fnError } = await supabase
-        .rpc('get_email_by_username', { p_username: username.trim() });
+      const input = username.trim();
 
-      if (fnError || !emailData) {
-        setError(L.login.wrong);
-        setLoading(false);
-        return;
+      // @ varsa birbaşa email kimi istifadə et, yoxsa username-dən tap
+      let loginEmail = input;
+
+      if (!input.includes('@')) {
+        const { data: emailData, error: fnError } = await supabase
+          .rpc('get_email_by_username', { p_username: input });
+
+        if (fnError) {
+          console.error('get_email_by_username error:', fnError);
+          setError('Funksiya xətası: ' + fnError.message);
+          setLoading(false);
+          return;
+        }
+        if (!emailData) {
+          setError('Bu istifadəçi adı tapılmadı');
+          setLoading(false);
+          return;
+        }
+        loginEmail = emailData;
       }
 
-      // Email ilə daxil ol
+      console.log('Logging in with email:', loginEmail);
+
       const { error: signInError } = await supabase.auth.signInWithPassword({
-        email: emailData,
+        email: loginEmail,
         password,
       });
 
-      if (signInError) setError(L.login.wrong);
-    } catch {
-      setError(L.login.wrong);
+      if (signInError) {
+        console.error('signIn error:', signInError);
+        setError(signInError.message);
+      }
+    } catch (e) {
+      console.error('Login catch:', e);
+      setError(e.message);
     }
 
     setLoading(false);
@@ -72,7 +90,7 @@ export default function Login() {
             <div className="space-y-3">
               <div>
                 <label className={`block text-[11px] font-semibold mb-1.5 ${theme.textDim} uppercase tracking-wider`}>
-                  {L.login.username}
+                  {L.login.username || 'İstifadəçi adı / E-poçt'}
                 </label>
                 <div className="relative">
                   <UserIcon className={`absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 ${theme.textFaint}`} />
@@ -81,6 +99,7 @@ export default function Login() {
                     value={username}
                     onChange={(e) => { setUsername(e.target.value); setError(null); }}
                     onKeyDown={(e) => e.key === 'Enter' && submit()}
+                    placeholder="admin və ya admin@company.az"
                     className={`w-full pl-9 pr-3 py-2.5 rounded-lg border ${theme.input} text-sm`}
                     autoFocus
                     autoComplete="username"
