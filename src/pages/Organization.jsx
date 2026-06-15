@@ -67,10 +67,13 @@ export default function Organization() {
       level:             u.level,
       name_en:           u.name_en,
       name_az:           u.name_az,
-      budget_headcount:  Number(u.budget_headcount  || 0),
-      budget_vacancy:    Number(u.budget_vacancy    || 0),
-      budget_salary_inc: Number(u.budget_salary_inc || 0),
-      budget: Number(u.budget_headcount||0) + Number(u.budget_vacancy||0) + Number(u.budget_salary_inc||0),
+      has_budget:        !!u.has_budget,
+      budget_headcount:  u.has_budget ? Number(u.budget_headcount  || 0) : 0,
+      budget_vacancy:    u.has_budget ? Number(u.budget_vacancy    || 0) : 0,
+      budget_salary_inc: u.has_budget ? Number(u.budget_salary_inc || 0) : 0,
+      budget:            u.has_budget
+        ? Number(u.budget_headcount||0) + Number(u.budget_vacancy||0) + Number(u.budget_salary_inc||0)
+        : 0,
     };
     if (u._new) {
       const { error } = await supabase.from('org_units').insert(payload);
@@ -90,13 +93,17 @@ export default function Organization() {
     refresh();
   };
 
+  // İstənilən levelə alt-bölmə əlavə etmək — division məcburiyyəti yoxdur
   const startAdd = (parentUnit) => {
+    const parentLevel = parentUnit?.level;
+    const childLevel  = parentLevel ? nextLevel(parentLevel) : 'division';
     setEditing({
       id: crypto.randomUUID(),
       company_id:        parentUnit ? parentUnit.company_id : (companyFilter || companies[0]?.id),
       parent_id:         parentUnit?.id || null,
-      level:             parentUnit ? nextLevel(parentUnit.level) : 'division',
+      level:             childLevel,
       name_en: '', name_az: '',
+      has_budget: false,
       budget_headcount: 0, budget_vacancy: 0, budget_salary_inc: 0,
       _new: true,
     });
@@ -333,7 +340,7 @@ function BudgetPill({ icon, label, value, lang, color, theme }) {
 
 // ─── Edit Modal ───────────────────────────────────────────────────────────────
 function OrgUnitEditModal({ L, lang, theme, unit, companies, orgUnits, isAdmin, onSave, onClose }) {
-  const [u, setU] = useState(unit);
+  const [u, setU] = useState({ has_budget: false, ...unit });
 
   const parentOptions = useMemo(() => {
     if (!u.company_id) return [];
@@ -342,19 +349,21 @@ function OrgUnitEditModal({ L, lang, theme, unit, companies, orgUnits, isAdmin, 
       .filter(o => levelOrder(o.level) < levelOrder(u.level));
   }, [u.company_id, u.level, u.id, orgUnits]);
 
-  // Parent büdcəsi — xəbərdarlıq üçün
   const parentBudget = useMemo(() => {
+    if (!u.has_budget) return null;
     if (!u.parent_id) {
       const co = companies.find(c => c.id === u.company_id);
-      return co ? Number(co.budget) : null;
+      return co?.has_budget ? Number(co.budget) : null;
     }
     const par = orgUnits.find(o => o.id === u.parent_id);
-    return par ? Number(par.budget) : null;
-  }, [u.parent_id, u.company_id, companies, orgUnits]);
+    return (par?.has_budget) ? Number(par.budget) : null;
+  }, [u.parent_id, u.company_id, u.has_budget, companies, orgUnits]);
 
-  const totalBudget = Number(u.budget_headcount||0) + Number(u.budget_vacancy||0) + Number(u.budget_salary_inc||0);
-  const overBudget  = parentBudget !== null && totalBudget > parentBudget;
-  const valid       = u.name_en && u.name_az && u.company_id && u.level && !overBudget;
+  const totalBudget = u.has_budget
+    ? Number(u.budget_headcount||0) + Number(u.budget_vacancy||0) + Number(u.budget_salary_inc||0)
+    : 0;
+  const overBudget = u.has_budget && parentBudget !== null && parentBudget > 0 && totalBudget > parentBudget;
+  const valid = u.name_en && u.name_az && u.company_id && u.level && !overBudget;
 
   const setField = (field, val) => setU({ ...u, [field]: val });
 
@@ -372,13 +381,13 @@ function OrgUnitEditModal({ L, lang, theme, unit, companies, orgUnits, isAdmin, 
             </Field>
             <Field label={L.org.level} theme={theme}>
               <select value={u.level} disabled={!u._new}
-                onChange={e => setU({ ...u, level: e.target.value, parent_id: e.target.value === 'division' ? null : u.parent_id })}
+                onChange={e => setU({ ...u, level: e.target.value, parent_id: null })}
                 className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`}>
                 {LEVELS.map(l => <option key={l} value={l}>{L.levels[l]}</option>)}
               </select>
             </Field>
             <Field label={L.org.parent} theme={theme}>
-              <select value={u.parent_id || ''} disabled={u.level === 'division'}
+              <select value={u.parent_id || ''}
                 onChange={e => setU({ ...u, parent_id: e.target.value || null })}
                 className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`}>
                 <option value="">{L.org.noParent}</option>
@@ -399,40 +408,57 @@ function OrgUnitEditModal({ L, lang, theme, unit, companies, orgUnits, isAdmin, 
             className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm`} />
         </Field>
 
-        {/* Büdcə növləri */}
-        <div className={`p-3 rounded-lg border ${theme.border} ${theme.surface2} space-y-3`}>
-          <div className={`text-[11px] font-bold uppercase tracking-wider ${theme.textDim}`}>Büdcə növləri (AZN)</div>
-
-          <Field label="İşçi büdcəsi" theme={theme}>
-            <input type="number" value={u.budget_headcount}
-              onChange={e => setField('budget_headcount', e.target.value)}
-              className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm tabular-nums`} />
-          </Field>
-          <Field label="Vakansiya büdcəsi" theme={theme}>
-            <input type="number" value={u.budget_vacancy}
-              onChange={e => setField('budget_vacancy', e.target.value)}
-              className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm tabular-nums`} />
-          </Field>
-          <Field label="Maaş artımı büdcəsi" theme={theme}>
-            <input type="number" value={u.budget_salary_inc}
-              onChange={e => setField('budget_salary_inc', e.target.value)}
-              className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm tabular-nums`} />
-          </Field>
-
-          {/* Cəm + xəbərdarlıq */}
-          <div className={`flex justify-between pt-2 border-t ${theme.border} text-sm font-bold`}>
-            <span>Cəm</span>
-            <span className={`tabular-nums ${overBudget ? 'text-rose-500' : 'text-blue-600 dark:text-blue-400'}`}>
-              {fmtMoney(totalBudget, lang)} AZN
-            </span>
-          </div>
-          {parentBudget !== null && (
-            <div className={`text-xs ${overBudget ? 'text-rose-500' : theme.textFaint}`}>
-              Üst qurum büdcəsi: {fmtMoney(parentBudget, lang)} AZN
-              {overBudget && ' — cəm üst büdcədən artıqdır!'}
+        {/* Büdcə toggle */}
+        <label className={`flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer transition-colors ${
+          u.has_budget ? 'border-blue-500 bg-blue-500/5' : `${theme.border} ${theme.hover}`
+        }`}>
+          <input type="checkbox" checked={!!u.has_budget}
+            onChange={e => setU({ ...u, has_budget: e.target.checked,
+              budget_headcount: 0, budget_vacancy: 0, budget_salary_inc: 0 })}
+            className="w-4 h-4 accent-blue-600" />
+          <div>
+            <div className="text-sm font-bold">Bu bölməyə büdcə təyin et</div>
+            <div className={`text-[11px] ${theme.textFaint}`}>
+              {u.has_budget ? 'Büdcə sahələri aktivdir' : 'Büdcəsiz bölmə — xərclər şirkət büdcəsinə hesablanır'}
             </div>
-          )}
-        </div>
+          </div>
+        </label>
+
+        {/* Büdcə sahələri — yalnız has_budget=true olduqda */}
+        {u.has_budget && (
+          <div className={`p-3 rounded-lg border ${theme.border} ${theme.surface2} space-y-3`}>
+            <div className={`text-[11px] font-bold uppercase tracking-wider ${theme.textDim}`}>Büdcə növləri (AZN)</div>
+
+            <Field label="İşçi büdcəsi" theme={theme}>
+              <input type="number" value={u.budget_headcount || 0}
+                onChange={e => setField('budget_headcount', e.target.value)}
+                className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm tabular-nums`} />
+            </Field>
+            <Field label="Vakansiya büdcəsi" theme={theme}>
+              <input type="number" value={u.budget_vacancy || 0}
+                onChange={e => setField('budget_vacancy', e.target.value)}
+                className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm tabular-nums`} />
+            </Field>
+            <Field label="Maaş artımı büdcəsi" theme={theme}>
+              <input type="number" value={u.budget_salary_inc || 0}
+                onChange={e => setField('budget_salary_inc', e.target.value)}
+                className={`w-full px-3 py-2 rounded-lg border ${theme.input} text-sm tabular-nums`} />
+            </Field>
+
+            <div className={`flex justify-between pt-2 border-t ${theme.border} text-sm font-bold`}>
+              <span>Cəm</span>
+              <span className={`tabular-nums ${overBudget ? 'text-rose-500' : 'text-blue-600 dark:text-blue-400'}`}>
+                {fmtMoney(totalBudget, lang)} AZN
+              </span>
+            </div>
+            {parentBudget !== null && parentBudget > 0 && (
+              <div className={`text-xs ${overBudget ? 'text-rose-500 font-semibold' : theme.textFaint}`}>
+                Üst qurum büdcəsi: {fmtMoney(parentBudget, lang)} AZN
+                {overBudget && ' — cəm üst büdcədən artıqdır!'}
+              </div>
+            )}
+          </div>
+        )}
       </div>
       <Buttons onSave={() => onSave(u)} onCancel={onClose} disabled={!valid} L={L} theme={theme} />
     </Modal>
